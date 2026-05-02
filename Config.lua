@@ -37,6 +37,23 @@ local function MakeCheckbox(parent, labelText, yOffset, dbKey)
     return cb
 end
 
+local function SaveCheckboxStates(frame)
+    if not FeralHelperDB or not frame or not frame.checkboxes then return end
+    for _, cb in ipairs(frame.checkboxes) do
+        FeralHelperDB[cb.dbKey] = cb:GetChecked() and true or false
+    end
+end
+
+local function LoadConfigFrameValues(frame)
+    if not FeralHelperDB or not frame then return end
+    frame.editBox:SetText(FeralHelperDB.hysteriaTarget or "")
+    frame.editText:SetText(FeralHelperDB.whisperText or "")
+    frame.editInnervate:SetText(FeralHelperDB.innervateWhisper or "Ich wirke Anregen auf dich!")
+    for _, cb in ipairs(frame.checkboxes) do
+        cb:SetChecked(FeralHelperDB[cb.dbKey])
+    end
+end
+
 local function MakeSectionLabel(parent, labelText, yOffset)
     local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lbl:SetPoint("TOPLEFT", 18, yOffset)
@@ -45,13 +62,16 @@ local function MakeSectionLabel(parent, labelText, yOffset)
     return lbl
 end
 
-function FeralHelper:CreateConfigFrame()
+function FeralHelper:CreateConfigFrame(noShow)
     if self.configFrame then
-        self.configFrame:Show()
+        if not noShow then
+            self.configFrame:Show()
+        end
         return
     end
 
     local f = CreateFrame("Frame", "FeralHelperConfigFrame", UIParent)
+    f.name = "FeralHelper"
     f:SetSize(410, 580)
     f:SetPoint("CENTER")
     f:SetMovable(true)
@@ -208,7 +228,7 @@ function FeralHelper:CreateConfigFrame()
             DEFAULT_CHAT_FRAME:AddMessage("|cffff3333FeralHelper:|r Kein Ziel gesetzt!")
             return
         end
-        SendChatMessage(FeralHelperDB.whisperText, "WHISPER", nil, target)
+        SendChatMessage(FeralHelper:GetWhisperText("whisperText"), "WHISPER", nil, target)
         DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99FeralHelper:|r Test an |cffffff00" .. target .. "|r gesendet.")
     end)
 
@@ -217,14 +237,23 @@ function FeralHelper:CreateConfigFrame()
     f.editInnervate = eb3
     f.checkboxes    = cbs
 
-    f:SetScript("OnShow", function(self)
-        self.editBox:SetText(FeralHelperDB.hysteriaTarget or "")
-        self.editText:SetText(FeralHelperDB.whisperText or "")
-        self.editInnervate:SetText(FeralHelperDB.innervateWhisper or "Ich wirke Anregen auf dich!")
-        for _, cb in ipairs(self.checkboxes) do
-            cb:SetChecked(FeralHelperDB[cb.dbKey])
-        end
-    end)
+    f:SetScript("OnShow", LoadConfigFrameValues)
+    f:SetScript("OnHide", SaveCheckboxStates)
+    LoadConfigFrameValues(f)
 
     self.configFrame = f
+    if noShow then
+        f:Hide()
+    else
+        f:Show()
+    end
+end
+
+function FeralHelper:RegisterInterfaceOptions()
+    if self.interfaceOptionsRegistered then return end
+    self:CreateConfigFrame(true)
+    if InterfaceOptions_AddCategory and self.configFrame then
+        InterfaceOptions_AddCategory(self.configFrame)
+        self.interfaceOptionsRegistered = true
+    end
 end

@@ -4,6 +4,23 @@
 
 FeralHelper = FeralHelper or {}
 local FH = FeralHelper
+local addonActive = false
+
+local function IsDruidPlayer()
+    local _, class = UnitClass("player")
+    return class == "DRUID"
+end
+
+local function DisableForNonDruid(frame)
+    addonActive = false
+    FH.disabled = true
+    if frame then
+        frame:UnregisterAllEvents()
+    end
+    if DEFAULT_CHAT_FRAME then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99FeralHelper|r deaktiviert: Spieler ist kein Druide.")
+    end
+end
 
 -- ============================================================
 -- Spell-Namen via GetSpellInfo (holt lokalisierten Namen
@@ -17,26 +34,55 @@ local SPELL_BERSERK     = GetSpellInfo(50334) or "Berserker"
 local SPELL_CLEARCAST   = GetSpellInfo(16870) or "Klarsicht"
 local SPELL_INNERVATE   = GetSpellInfo(29166) or "Anregen"
 local SPELL_SURVINST    = GetSpellInfo(61336) or "Ueberlebensinstinkte"
+local SPELL_FRENZIEDREG = GetSpellInfo(22842) or "Rasende Regeneration"
 local SPELL_REBIRTH     = GetSpellInfo(20484) or "Wiedergeburt"
 local SPELL_BEARFORM    = GetSpellInfo(9634)  or "Terrorbärengestalt"
 local SPELL_ENRAGE      = GetSpellInfo(5229)  or "Wutanfall"
 local SPELL_SCHWERTGARN = GetSpellInfo(55776) or "Schwertwallgarn"
 
+function FH:GetWhisperText(dbKey)
+    local text = FeralHelperDB and FeralHelperDB[dbKey]
+    if text and text:match("%S") then
+        return text
+    end
+    return self.defaults and self.defaults[dbKey] or ""
+end
+
+local function IsInBearForm()
+    return GetShapeshiftForm() == 1
+end
+
 -- icd = Internal Cooldown in Sekunden (fuer synthetischen CD nach Proc-Ende)
 local _TRINKET_PROC_IDS = {
     [50351] = { icd=45, spells={ 71887 } }, [50352] = { icd=45, spells={ 71887 } },  -- Death's Verdict (N)
-    [50353] = { icd=45, spells={ 71888 } }, [50354] = { icd=45, spells={ 71888 } },  -- Death's Verdict (H)
-    [50343] = { icd=45, spells={ 71901 } }, [50344] = { icd=45, spells={ 71901 } },  -- Whispering Fanged Skull (N)
+    [50353] = { icd=45, spells={ 71888, 71601, 71644 } }, [50354] = { icd=45, spells={ 71888 } },  -- Death's Verdict (H) / DFO fallback
+    [50343] = { icd=45, spells={ 71901, 71401, 71541 } }, [50344] = { icd=45, spells={ 71901, 71578 } },  -- Whispering Fanged Skull (N) / Organ fallback
     [50346] = { icd=45, spells={ 71900 } }, [50347] = { icd=45, spells={ 71900 } },  -- Whispering Fanged Skull (H)
     [50733] = { icd=45, spells={ 71879 } }, [50734] = { icd=45, spells={ 71880 } },  -- Needle-Encrusted Scorpion
     [45931] = { icd=45, spells={ 75171 } },                                           -- Mjolnir Runestone
-    [46130] = { icd=45, spells={ 60229 } }, [47115] = { icd=45, spells={ 60229 } },  -- Darkmoon Card: Greatness
-    [50363] = { icd=105, spells={ 71485, 71486, 71484, 71491, 71488 } },              -- Deathbringer's Will (N)
+    [46130] = { icd=45, spells={ 60229 } }, [47115] = { icd=45, spells={ 60229, 67703, 67708 } },  -- Darkmoon Card: Greatness / Death's Verdict fallback
+    [50363] = { icd=105, spells={ 71485, 71486, 71484, 71491, 71488, 71487, 71492, 71556, 71557, 71558, 71559, 71560, 71561 } }, -- Deathbringer's Will (N)
     [50364] = { icd=105, spells={ 71485, 71486, 71484, 71491, 71488 } },              -- Deathbringer's Will (H)
-    [54590] = { icd=45, spells={ 75473 }, extra={ "Durchbohrendes Zwielicht" } },       -- Sharpened Twilight Scale (N)
+    [54590] = { icd=45, spells={ 75473, 75456 }, extra={ "Durchbohrendes Zwielicht" } }, -- Sharpened Twilight Scale (N)
     [54718] = { icd=45, spells={ 75466 }, extra={ "Durchbohrendes Zwielicht" } },       -- Sharpened Twilight Scale (H)
     [50355] = { icd=45, spells={ 71873 } }, [71396] = { icd=45, spells={ 71873 } },   -- Herkumlkriegsabzeichen
     [47214] = { icd=43, spells={ 67671 } }, [67671] = { icd=43, spells={ 67671 } },   -- Banner des Sieges
+
+    -- Additive WotLK proc fallbacks. Bestehende Zuordnungen oben bleiben unveraendert.
+    [50362] = { icd=105, spells={ 71484, 71485, 71486, 71487, 71491, 71492, 71556, 71557, 71558, 71559, 71560, 71561 } }, -- Deathbringer's Will
+    [50342] = { icd=45,  spells={ 71401, 71541 } }, -- Whispering Fanged Skull
+    [50348] = { icd=45,  spells={ 71601, 71644 } }, -- Dislodged Foreign Object
+    [50360] = { icd=45,  spells={ 71605, 71636 } }, -- Phylactery of the Nameless Lich
+    [50365] = { icd=45,  spells={ 71605, 71636 } }, -- Phylactery of the Nameless Lich
+    [47303] = { icd=45,  spells={ 67703, 67708 } }, -- Death's Choice
+    [47464] = { icd=45,  spells={ 67772, 67773 } }, -- Death's Choice
+    [47131] = { icd=45,  spells={ 67772, 67773 } }, -- Death's Verdict
+    [54569] = { icd=45,  spells={ 75458, 75456 }, extra={ "Durchbohrendes Zwielicht" } }, -- Sharpened Twilight Scale
+    [54572] = { icd=45,  spells={ 75466, 75473 } }, -- Charred Twilight Scale
+    [54588] = { icd=45,  spells={ 75466, 75473 } }, -- Charred Twilight Scale
+    [50341] = { icd=45,  spells={ 71578 } }, -- Unidentifiable Organ
+    [54571] = { icd=45,  spells={ 75477 } }, -- Petrified Twilight Scale
+    [54591] = { icd=45,  spells={ 75480 } }, -- Petrified Twilight Scale
 }
 -- itemId -> { icd=N, names={...} }  – auf PLAYER_LOGIN befuellt
 local TRINKET_PROCS = {}
@@ -133,6 +179,7 @@ end
 -- 1) HYSTERIA - Icon + Countdown + Whisper
 -- ============================================================
 
+local SendHysteriaWhisper
 local hysteriaFrame
 local function CreateHysteriaFrame()
     hysteriaFrame = CreateMovableFrame("FeralHelperHysteriaFrame", 64, 90,
@@ -207,13 +254,9 @@ local function CreateHysteriaFrame()
         -- Wenn endTime gerade abgelaufen ist -> Whisper senden
         if self.endTime ~= nil then
             self.endTime = nil
-            if InCombatLockdown() then
-                local target = FeralHelperDB.hysteriaTarget
-                if target and target ~= "" and FeralHelperDB.hysteriaWhisperOnCdExpire ~= false then
-                    SendChatMessage(FeralHelperDB.whisperText, "WHISPER", nil, target)
-                    DEFAULT_CHAT_FRAME:AddMessage(
-                        "|cff33ff99FeralHelper:|r Hysteria CD abgelaufen - Whisper an " .. target)
-                end
+            if FeralHelperDB.hysteriaWhisperOnCdExpire ~= false and SendHysteriaWhisper and SendHysteriaWhisper() then
+                DEFAULT_CHAT_FRAME:AddMessage(
+                    "|cff33ff99FeralHelper:|r Hysteria CD abgelaufen - Whisper gesendet.")
             end
         end
 
@@ -259,13 +302,14 @@ local function CreateHysteriaFrame()
                 return
             end
             -- Bereit -> Whisper senden
+            if FeralHelperDB.hysteriaWhisperOnClick == false then
+                return
+            end
             local target = FeralHelperDB.hysteriaTarget
             if target and target ~= "" then
-                if FeralHelperDB.hysteriaWhisperOnClick ~= false then
-                    SendChatMessage(FeralHelperDB.whisperText, "WHISPER", nil, target)
-                    DEFAULT_CHAT_FRAME:AddMessage(
-                        "|cff33ff99FeralHelper:|r Whisper an |cffffff00" .. target .. "|r gesendet.")
-                end
+                SendChatMessage(FH:GetWhisperText("whisperText"), "WHISPER", nil, target)
+                DEFAULT_CHAT_FRAME:AddMessage(
+                    "|cff33ff99FeralHelper:|r Whisper an |cffffff00" .. target .. "|r gesendet.")
             else
                 DEFAULT_CHAT_FRAME:AddMessage(
                     "|cffff3333FeralHelper:|r Kein Ziel gesetzt. /feralhelper")
@@ -473,6 +517,7 @@ local function CreateCDTracker()
     local _, _, clearcastIcon   = GetSpellInfo(16870)
     local _, _, innervateIcon   = GetSpellInfo(29166)
     local _, _, survInstIcon    = GetSpellInfo(61336)
+    local _, _, frenziedIcon    = GetSpellInfo(22842)
     local _, _, rebirthIcon     = GetSpellInfo(20484)
     local _, _, schwertgarnIcon  = GetSpellInfo(55776)
     local _, _, bersEnchIcon     = GetSpellInfo(59620)
@@ -482,7 +527,8 @@ local function CreateCDTracker()
     local entries = {
         { key="barkskin",    tex=barkskinIcon,   label="Baumrinde",    type="spell",      spell=SPELL_BARKSKIN },
         { key="berserk",     tex=berserkIcon,    label="Berserk",      type="spell",      spell=SPELL_BERSERK },
-        { key="tigersfury",  tex=tigersIcon,     label="Tigerwut",     type="spell",      spell=SPELL_TIGERSFURY },
+        { key="tigersfury",  tex=tigersIcon,     label="Tigerwut",     type="spell",      spell=SPELL_TIGERSFURY, hideInBear=true, slotIndex=3 },
+        { key="frenziedreg", tex=frenziedIcon,   label="RasReg",       type="spell",      spell=SPELL_FRENZIEDREG, selfCast=true, bearOnly=true, slotIndex=3 },
         { key="survinst",    tex=survInstIcon,   label="UeberInst",    type="spell",      spell=SPELL_SURVINST, selfCast=true },
         { key="innervate",   tex=innervateIcon,  label="Anregen",      type="spell",      spell=SPELL_INNERVATE,
           clickText="Ich wirke Anregen auf dich!", friendlyAliveOnly=true, requireInRange=true },
@@ -502,18 +548,26 @@ local function CreateCDTracker()
         { key="panic", tex=bearFormIcon or "Interface\\Icons\\Ability_Racial_BearForm",
           label="Panik", type="panic",
           macrotext="/cast [noform:1] " .. SPELL_BEARFORM
-                 .. "\n/stopmacro [noform:1]"
-                 .. "\n/cast " .. SPELL_ENRAGE
-                 .. "\n/cast " .. SPELL_SURVINST
-                 .. "\n/cast " .. SPELL_BARKSKIN },
+                 .. "\n/cancelaura " .. SPELL_HYSTERIA
+                 .. "\n/cast " .. SPELL_BARKSKIN
+                 .. "\n/cast [form:1] " .. SPELL_ENRAGE
+                 .. "\n/cast [form:1] " .. SPELL_SURVINST },
     }
 
+    local visualIndex = 0
     for i, e in ipairs(entries) do
         local icon = CreateCDIcon(cdTracker, e.tex or "Interface\\Icons\\INV_Misc_QuestionMark", e.label)
-        icon:SetPoint("LEFT", cdTracker, "LEFT", (i - 1) * 42 + 4, 8)
+        local slotIndex = e.slotIndex
+        if slotIndex then
+            visualIndex = math.max(visualIndex, slotIndex)
+        else
+            visualIndex = visualIndex + 1
+            slotIndex = visualIndex
+        end
+        icon:SetPoint("LEFT", cdTracker, "LEFT", (slotIndex - 1) * 42 + 4, 8)
         icon.entry = e
         cdIcons[e.key] = icon
-        if e.hideWhenInactive then icon:Hide() end
+        if e.hideWhenInactive or e.bearOnly then icon:Hide() end
 
         -- Panik-Knopf: 1 Klick aus Bärengestalt = alles sofort
         -- aus Katze/Kaster: 1. Klick -> Bär+Baumrinde, 2. Klick -> Wutanfall+ÜberInst
@@ -524,6 +578,7 @@ local function CreateCDTracker()
             btn:SetAttribute("type", "macro")
             btn:SetAttribute("macrotext",
                 "/cast [noform:1] " .. SPELL_BEARFORM ..
+                "\n/cancelaura " .. SPELL_HYSTERIA ..
                 "\n/cast " .. SPELL_BARKSKIN ..
                 "\n/cast [form:1] " .. SPELL_ENRAGE ..
                 "\n/cast [form:1] " .. SPELL_SURVINST)
@@ -600,7 +655,7 @@ local function CreateCDTracker()
                 end
                 if ent.sayOutOfRange or ent.requireInRange then
                     local inRange = IsSpellInRange(ent.spell, "target")
-                    if inRange == 0 then
+                    if inRange ~= 1 then
                         if ent.sayOutOfRange and FeralHelperDB.outOfRangeToSay ~= false then
                             SendChatMessage(target .. " nicht in Reichweite", "SAY")
                         end
@@ -608,7 +663,7 @@ local function CreateCDTracker()
                     end
                 end
                 if not ent.noWhisper and FeralHelperDB.innervateWhisperEnabled ~= false then
-                    local text = (ent.key == "innervate" and FeralHelperDB.innervateWhisper)
+                    local text = (ent.key == "innervate" and FH:GetWhisperText("innervateWhisper"))
                                  or ent.clickText
                     SendChatMessage(text, "WHISPER", nil, target)
                 end
@@ -627,8 +682,25 @@ local function CreateCDTracker()
         if elapsed < 0.1 then return end
         elapsed = 0
 
-        for _, icon in pairs(cdIcons) do
+        for _, icon in pairs(cdIcons) do repeat
             local ent = icon.entry
+            local isBear = IsInBearForm()
+
+            if ent.hideInBear and isBear then
+                icon:Hide()
+                icon.timer:SetText("")
+                icon.border:Hide()
+                CooldownFrame_SetTimer(icon.cd, 0, 0, 0)
+                break
+            elseif ent.bearOnly and not isBear then
+                icon:Hide()
+                icon.timer:SetText("")
+                icon.border:Hide()
+                CooldownFrame_SetTimer(icon.cd, 0, 0, 0)
+                break
+            elseif ent.hideInBear or ent.bearOnly then
+                icon:Show()
+            end
 
             if ent.type == "spell" then
                 local start, dur, enabled = GetSpellCooldown(ent.spell)
@@ -795,7 +867,7 @@ local function CreateCDTracker()
                     end
                 end
             end
-        end
+        until true end
     end)
 
     RestoreFramePosition(cdTracker)
@@ -824,7 +896,7 @@ local function ShowSetupGuide()
     m("                   " .. w .. "Shift+Drag zum Verschieben. Klick = Whisper sofort senden." .. r)
     m("  " .. y .. "HoP-Button" .. r       .. w .. "      Erscheint wenn Hand des Schutzes aktiv -> klicken entfernt Buff" .. r)
     m("  " .. y .. "Freizaubern" .. r      .. w .. "     Erscheint wenn Klarsicht-Proc aktiv (Shift+Drag)" .. r)
-    m("  " .. y .. "CD-Leiste" .. r        .. w .. "       Baumrinde / Berserk / Tigerwut / Überlebensinstinkte" .. r)
+    m("  " .. y .. "CD-Leiste" .. r        .. w .. "       Baumrinde / Berserk / Tigerwut bzw. Rasende Regeneration / Überlebensinstinkte" .. r)
     m("                   " .. w .. "Anregen / Wiedergeburt (Klick -> wirkt auf Ziel + Whisper)" .. r)
     m("                   " .. w .. "Trinket 1+2 (Proc grün / ICD gedimmt) / Handschuhe / Schuhe" .. r)
     m("                   " .. w .. "Schwertwallgarn + Berserker-VZ (nur sichtbar wenn aktiv)" .. r)
@@ -845,12 +917,13 @@ main:RegisterEvent("PLAYER_REGEN_DISABLED")
 main:RegisterEvent("UNIT_AURA")
 main:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 
-local function SendHysteriaWhisper()
+SendHysteriaWhisper = function()
     local target = FeralHelperDB.hysteriaTarget
-    local text   = FeralHelperDB.whisperText
-    if target and target ~= "" and text and text ~= "" then
-        SendChatMessage(text, "WHISPER", nil, target)
+    if target and target ~= "" then
+        SendChatMessage(FH:GetWhisperText("whisperText"), "WHISPER", nil, target)
+        return true
     end
+    return false
 end
 
 local delayFrame = CreateFrame("Frame")
@@ -868,15 +941,24 @@ end
 main:SetScript("OnEvent", function(self, event, arg1, ...)
     -- arg1 = erstes Event-Argument, "..." = alle weiteren
 
-    if event == "ADDON_LOADED" and arg1 == "FeralHelper" then
+    if event == "ADDON_LOADED" and arg1 == "feralhelper-addon-master" then
         FeralHelperDB = FeralHelperDB or {}
         for k, v in pairs(FH.defaults) do
             if FeralHelperDB[k] == nil then
                 FeralHelperDB[k] = (type(v) == "table") and {} or v
             end
         end
+        if FH.RegisterInterfaceOptions then
+            FH:RegisterInterfaceOptions()
+        end
 
     elseif event == "PLAYER_LOGIN" then
+        if not IsDruidPlayer() then
+            DisableForNonDruid(self)
+            return
+        end
+        addonActive = true
+        FH.disabled = nil
         BuildTrinketProcNames()
         CreateHysteriaFrame()
         CreateHoPButton()
@@ -896,6 +978,7 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         -- 3s nach Kampfbeginn Whisper senden
         ScheduleAfter(3, function()
             if not InCombatLockdown() then return end
+            if FeralHelperDB.hysteriaWhisperOnCombat == false then return end
             local target = FeralHelperDB.hysteriaTarget
             if not target or target == "" then
                 DEFAULT_CHAT_FRAME:AddMessage(
@@ -906,7 +989,6 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
             if hysteriaFrame.endTime and hysteriaFrame.endTime > GetTime() then
                 return
             end
-            if FeralHelperDB.hysteriaWhisperOnCombat == false then return end
             SendHysteriaWhisper()
             DEFAULT_CHAT_FRAME:AddMessage(
                 "|cff33ff99FeralHelper:|r Whisper an " .. target .. " gesendet.")
@@ -940,8 +1022,8 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
               destGUID, destName, _, spellId, spellName = ...
 
         if subevent == "SPELL_AURA_APPLIED"
-           and destName == UnitName("player")
-           and spellName == SPELL_HYSTERIA then
+           and destGUID == UnitGUID("player")
+           and (spellId == 49016 or spellName == SPELL_HYSTERIA) then
             StartHysteriaCooldown()
         end
     end
@@ -953,6 +1035,10 @@ end)
 SLASH_FERALHELPER1 = "/feralhelper"
 SLASH_FERALHELPER2 = "/fh"
 SlashCmdList["FERALHELPER"] = function(msg)
+    if not addonActive then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99FeralHelper|r ist nur für Druiden aktiv.")
+        return
+    end
     msg = msg and msg:lower() or ""
     if msg == "reset" then
         FeralHelperDB.framePositions = {}
