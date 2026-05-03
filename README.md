@@ -6,7 +6,7 @@ WoW 3.3.5a Addon für Feral Druiden (Katze & Bär). Trackt Cooldowns, Procs und 
 
 ## Features
 
-### CD-Tracker Leiste (15 Slots)
+### CD-Tracker Leiste (16 Slots)
 
 | Icon | Funktion | Klickbar |
 |------|----------|----------|
@@ -21,6 +21,7 @@ WoW 3.3.5a Addon für Feral Druiden (Katze & Bär). Trackt Cooldowns, Procs und 
 | Nitro Boots (Schuhe) | Proc-Erkennung | ✓ Aktiviert Item |
 | Waffe VZ | Zeigt aktiven Waffenproc mit dynamischem Icon | — |
 | Lightweave | Schneider-Mantel-VZ, ICD 60s | — |
+| Schwertwallgarn | Schneider-Mantel-VZ, ICD 55s | — |
 | Ring 1 & 2 | Nur bei Ashen Band equipped | — |
 | Panik-Knopf | Bär + Baumrinde + Wutanfall + ÜberInst in 1 Klick | ✓ |
 
@@ -28,7 +29,6 @@ WoW 3.3.5a Addon für Feral Druiden (Katze & Bär). Trackt Cooldowns, Procs und 
 
 Erkennt automatisch welcher Waffenproc gerade aktiv ist und zeigt dessen Icon:
 
-- Schwertwallgarn (ICD 55s)
 - Black Magic (ICD 35s)
 - Berserker, Mongoose, Vollstrecker, BlutAbzug, Kreuzritter (ICD 0s)
 
