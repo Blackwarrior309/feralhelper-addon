@@ -175,10 +175,7 @@ feralhelper-addon-master/
 |-- FeralHelper.lua
 |-- Config.lua
 |-- feralhelper-addon-master.toc
-`-- TrinketCDs/
-    |-- TrinketCDsDB.lua
-    |-- TrinketCDs.lua
-    `-- ...
+`-- README.md
 ```
 
 ---
