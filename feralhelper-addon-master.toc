@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: feralhelper-addon-master
+## Notes: Feral DPS Druiden Helfer - Boesartigkeit, HoP, Cooldowns
+## Author: Du
+## Version: 1.0
+## SavedVariables: FeralHelperDB
+
+Config.lua
+FeralHelper.lua
