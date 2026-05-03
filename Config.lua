@@ -28,6 +28,9 @@ FeralHelper.defaults = {
     showCDTracker            = true,
     showRoarRipWarning       = false,
     showRipSnapshot          = false,
+    showPullAssistant        = false,
+    pullTrainerEnabled       = false,
+    pullMaxWait              = 8,
     minimapAngle             = 220,
 }
 
@@ -278,10 +281,12 @@ function FeralHelper:CreateConfigFrame(noShow)
 
     -- Katzenrotation
     MakeSectionLabel(f, "-- Katzenrotation --", -576)
-    MakeHelpText(f, "Experimentell: Rip-Snapshot bleibt standardmaessig aus. Bei Aktivierung zeigt es Snapshot-Vergleich, Pull-Modus und Recast-Grund.", -592)
+    MakeHelpText(f, "Experimentell: Pull-Assist ist ein separates Modul fuer Start-Rota, Snapshot-Fenster und Training.", -592)
     local catCbs = {
         MakeCheckbox(f, "Roar+Rip Warnung",   -628, "showRoarRipWarning"),
         MakeCheckbox(f, "Rip-Snapshot/Pull-Modus", -650, "showRipSnapshot"),
+        MakeCheckbox(f, "Pull-Assist Modul", -672, "showPullAssistant"),
+        MakeCheckbox(f, "Pull-Rota Burst Trainer", -694, "pullTrainerEnabled"),
     }
     for _, cb in ipairs(catCbs) do
         cb:SetScript("OnClick", function(self)
@@ -292,10 +297,10 @@ function FeralHelper:CreateConfigFrame(noShow)
     end
 
     -- Frames sperren
-    MakeSectionLabel(f, "-- Frames --", -682)
+    MakeSectionLabel(f, "-- Frames --", -726)
     local lockBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     lockBtn:SetSize(200, 26)
-    lockBtn:SetPoint("TOPLEFT", 30, -698)
+    lockBtn:SetPoint("TOPLEFT", 30, -742)
     lockBtn:SetScript("OnClick", function()
         FeralHelperDB.framesLocked = not FeralHelperDB.framesLocked
         lockBtn:SetText(FeralHelperDB.framesLocked and "Frames entsperren" or "Frames sperren")
@@ -308,7 +313,7 @@ function FeralHelper:CreateConfigFrame(noShow)
 
     local showFramesBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     showFramesBtn:SetSize(200, 26)
-    showFramesBtn:SetPoint("TOPLEFT", 30, -728)
+    showFramesBtn:SetPoint("TOPLEFT", 30, -772)
     showFramesBtn:SetText("Frames anzeigen")
     showFramesBtn:SetScript("OnClick", function()
         if FeralHelperDB then
@@ -317,6 +322,7 @@ function FeralHelper:CreateConfigFrame(noShow)
             FeralHelperDB.showCDTracker = true
             FeralHelperDB.showRoarRipWarning = true
             FeralHelperDB.showRipSnapshot = true
+            FeralHelperDB.showPullAssistant = true
         end
         if FeralHelper.ShowPositionFrames then
             FeralHelper:ShowPositionFrames()
@@ -330,7 +336,7 @@ function FeralHelper:CreateConfigFrame(noShow)
 
     local defaultsBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     defaultsBtn:SetSize(150, 26)
-    defaultsBtn:SetPoint("TOPLEFT", 240, -698)
+    defaultsBtn:SetPoint("TOPLEFT", 240, -742)
     defaultsBtn:SetText("Standard laden")
     defaultsBtn:SetScript("OnClick", function()
         FeralHelper:ApplyDefaultSettings(true)

@@ -54,6 +54,7 @@ local ROARRIP_DELTA      = 3   -- gleichzeitig = Differenz < N Sekunden
 local RIP_RECAST_THRESH  = 5   -- "jetzt casten" wenn TF aktiv + Rip <= N Sekunden
 local PULL_MODE_WINDOW   = 18  -- Pull-Anzeige maximal N Sekunden nach Kampfbeginn
 local PULL_PROC_WAIT     = 8   -- so lange auf fruehe Procs warten, danach Rip empfehlen
+local PULL_TRAIN_WINDOW  = 20  -- Trainer bewertet die ersten Sekunden nach Pull
 
 function FH:GetWhisperText(dbKey)
     local text = FeralHelperDB and FeralHelperDB[dbKey]
@@ -1269,6 +1270,237 @@ local function CreateRipSnapshotFrame()
 end
 
 -- ============================================================
+-- 2e) PULL-ASSIST MODUL + BURST TRAINER
+-- ============================================================
+
+local pullFrame
+local pullState = {}
+
+local function PullAssistantEnabled()
+    return FeralHelperDB and FeralHelperDB.showPullAssistant == true
+end
+
+local function PullTrainerEnabled()
+    return FeralHelperDB and FeralHelperDB.pullTrainerEnabled == true
+end
+
+local function GetPullMaxWait()
+    local wait = tonumber(FeralHelperDB and FeralHelperDB.pullMaxWait) or PULL_PROC_WAIT
+    if wait < 3 then wait = 3 end
+    if wait > 12 then wait = 12 end
+    return wait
+end
+
+local function SpellReady(spellName)
+    local start, dur = GetSpellCooldown(spellName)
+    return not (start and dur and dur > 1.5), start and dur and math.max(0, start + dur - GetTime()) or 0
+end
+
+local function GetPullFacts()
+    local now = GetTime()
+    local _, _, _, srExp   = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
+    local _, _, _, tfExp   = GetAuraInfoById("player", 5217, "HELPFUL")
+    local _, _, _, hystExp = GetAuraInfoById("player", 49016, "HELPFUL")
+    local _, _, _, totExp  = GetAuraInfo("player", SPELL_TRICKS, "HELPFUL")
+    local tfReady, tfCd    = SpellReady(SPELL_TIGERSFURY)
+    local berserkReady     = SpellReady(SPELL_BERSERK)
+    local t1               = GetTrackedSlotProc(SLOT_TRINKET1)
+    local t2               = GetTrackedSlotProc(SLOT_TRINKET2)
+    local facts = {
+        now          = now,
+        inCat        = IsInCatForm(),
+        target       = UnitExists("target"),
+        sr           = srExp ~= nil,
+        srRem        = srExp and math.max(0, srExp - now) or 0,
+        mangle       = TargetHasBleedDamageDebuff(),
+        tf           = tfExp ~= nil,
+        tfRem        = tfExp and math.max(0, tfExp - now) or 0,
+        tfReady      = tfReady,
+        tfCd         = tfCd,
+        berserkReady = berserkReady,
+        hysteria     = hystExp ~= nil,
+        tricks       = totExp ~= nil,
+        t1           = t1,
+        t2           = t2,
+        anyProc      = t1.active or t2.active,
+        ap           = GetPlayerAttackPowerTotal(),
+        ripExp       = GetOwnRipOnTarget(),
+    }
+
+    facts.score = 0
+    if facts.sr then facts.score = facts.score + 20 end
+    if facts.mangle then facts.score = facts.score + 20 end
+    if facts.tf then facts.score = facts.score + 20 end
+    if facts.t1.active then facts.score = facts.score + 15 end
+    if facts.t2.active then facts.score = facts.score + 15 end
+    if facts.hysteria then facts.score = facts.score + 10 end
+    if facts.tricks then facts.score = facts.score + 10 end
+    if facts.score > 100 then facts.score = 100 end
+    return facts
+end
+
+local function PullReasonText(facts)
+    local reasons = {}
+    if facts.tf then reasons[#reasons + 1] = "TF" end
+    if facts.t1.active or facts.t2.active then reasons[#reasons + 1] = "Trinket" end
+    if facts.hysteria then reasons[#reasons + 1] = "Hysteria" end
+    if facts.tricks then reasons[#reasons + 1] = "Tricks" end
+    if #reasons == 0 then return "kein Burst aktiv" end
+    return table.concat(reasons, " ")
+end
+
+local function PullNextStep(facts, elapsed)
+    if not facts.inCat then return "Katzenform" end
+    if not facts.target then return "Ziel waehlen" end
+    if not facts.mangle then return "Mangle/Trauma setzen" end
+    if not facts.sr then return "Savage Roar aufbauen" end
+    if facts.tfReady and not facts.tf then return "Tigerwut nutzen" end
+    if not facts.anyProc and elapsed < GetPullMaxWait() then return "kurz auf Procs warten" end
+    return "Rip setzen"
+end
+
+local function PullShouldRip(facts, elapsed)
+    if not facts.inCat or not facts.target or not facts.sr or not facts.mangle then
+        return false
+    end
+    return facts.tf or facts.anyProc or elapsed >= GetPullMaxWait()
+end
+
+local function StartPullAttempt()
+    if not (PullAssistantEnabled() or PullTrainerEnabled()) then return end
+    local facts = GetPullFacts()
+    pullState = {
+        active       = true,
+        startTime    = GetTime(),
+        startedInCat = facts.inCat,
+        t1Ready      = facts.t1.ready,
+        t2Ready      = facts.t2.ready,
+        tfReady      = facts.tfReady,
+        firstRip     = nil,
+        casts        = {},
+        reported     = false,
+    }
+    if pullFrame and PullAssistantEnabled() then pullFrame:Show() end
+end
+
+local function FinishPullEvaluation(force)
+    if not PullTrainerEnabled() or not pullState.active or pullState.reported then return end
+    local rip = pullState.firstRip
+    if not rip then
+        if force then
+            pullState.reported = true
+            DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99FeralHelper Pull-Trainer:|r |cffff3333kein erster Rip im Pull-Fenster erkannt.|r")
+        end
+        return
+    end
+    pullState.reported = true
+
+    local issues = {}
+    if not pullState.startedInCat then issues[#issues + 1] = "Pull nicht in Katzenform gestartet" end
+    if not rip.facts.mangle then issues[#issues + 1] = "Rip ohne Mangle/Trauma gesetzt" end
+    if not rip.facts.sr then issues[#issues + 1] = "Rip ohne Savage Roar gesetzt" end
+    if pullState.tfReady and not rip.facts.tf then issues[#issues + 1] = "Tigerwut war bereit, aber beim Rip nicht aktiv" end
+    if (pullState.t1Ready or pullState.t2Ready) and not rip.facts.anyProc and rip.elapsed < GetPullMaxWait() then
+        issues[#issues + 1] = "Trinket-Procs nicht abgewartet"
+    end
+    if rip.elapsed > GetPullMaxWait() + 3 then issues[#issues + 1] = "Erster Rip sehr spaet" end
+
+    local color = rip.score >= 80 and "|cff00ff00" or (rip.score >= 60 and "|cffffff00" or "|cffff3333")
+    DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99FeralHelper Pull-Trainer:|r Score "
+        .. color .. rip.score .. "/100|r nach " .. math.floor(rip.elapsed * 10) / 10 .. "s")
+    DEFAULT_CHAT_FRAME:AddMessage("  Snapshot: " .. PullReasonText(rip.facts))
+    if #issues == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("  |cff00ff00Sauberer Pull: keine groben Fehler erkannt.|r")
+    else
+        for _, issue in ipairs(issues) do
+            DEFAULT_CHAT_FRAME:AddMessage("  |cffff3333- " .. issue .. "|r")
+        end
+    end
+end
+
+local function RecordPullCast(spellId, spellName)
+    if not pullState.active then return end
+    local elapsed = GetTime() - pullState.startTime
+    if elapsed > PULL_TRAIN_WINDOW then return end
+    pullState.casts[#pullState.casts + 1] = { t = elapsed, id = spellId, name = spellName }
+    if spellId == SPELLID_RIP and not pullState.firstRip then
+        local facts = GetPullFacts()
+        pullState.firstRip = { elapsed = elapsed, facts = facts, score = facts.score }
+        FinishPullEvaluation()
+    end
+end
+
+local function CreatePullAssistantFrame()
+    pullFrame = CreateMovableFrame("FeralHelperPullAssistantFrame", 210, 88,
+        { "CENTER", UIParent, "CENTER", -220, 0 })
+
+    local bg = pullFrame:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetTexture(0, 0, 0, 0.35)
+
+    local title = pullFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", pullFrame, "TOP", 0, -6)
+    pullFrame.title = title
+
+    local nextText = pullFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    nextText:SetPoint("TOP", title, "BOTTOM", 0, -4)
+    pullFrame.nextText = nextText
+
+    local detail = pullFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    detail:SetPoint("TOP", nextText, "BOTTOM", 0, -4)
+    detail:SetWidth(190)
+    detail:SetJustifyH("CENTER")
+    pullFrame.detail = detail
+
+    local score = pullFrame:CreateFontString(nil, "OVERLAY", "NumberFontNormalLarge")
+    score:SetPoint("BOTTOM", pullFrame, "BOTTOM", 0, 6)
+    pullFrame.score = score
+
+    local elapsed = 0
+    pullFrame:SetScript("OnUpdate", function(self, e)
+        elapsed = elapsed + e
+        if elapsed < 0.1 then return end
+        elapsed = 0
+        if not PullAssistantEnabled() then self:Hide(); return end
+
+        local inCombat = InCombatLockdown()
+        local facts = GetPullFacts()
+        local pullElapsed = pullState.active and pullState.startTime and (GetTime() - pullState.startTime) or 0
+        local shouldRip = inCombat and not facts.ripExp and PullShouldRip(facts, pullElapsed)
+        local state = "PREP"
+        if inCombat and not facts.ripExp then
+            state = shouldRip and "RIP NOW" or "WAIT"
+        elseif inCombat and facts.ripExp then
+            state = "SNAPSHOT OK"
+        end
+
+        self:Show()
+        self.title:SetText(state)
+        if state == "RIP NOW" then
+            self.title:SetTextColor(1, 0.15, 0.05)
+        elseif state == "WAIT" then
+            self.title:SetTextColor(1, 0.85, 0)
+        elseif state == "SNAPSHOT OK" then
+            self.title:SetTextColor(0.2, 1, 0.2)
+        else
+            self.title:SetTextColor(0.6, 0.9, 1)
+        end
+        self.nextText:SetText(PullNextStep(facts, pullElapsed))
+        self.detail:SetText(
+            "SR" .. (facts.sr and "+" or "-")
+            .. " M" .. (facts.mangle and "+" or "-")
+            .. " TF" .. (facts.tf and "+" or (facts.tfReady and " ready" or "-"))
+            .. " T1" .. (facts.t1.active and "P" or (facts.t1.ready and "R" or "CD"))
+            .. " T2" .. (facts.t2.active and "P" or (facts.t2.ready and "R" or "CD")))
+        self.score:SetText(facts.score .. "/100")
+        self.score:SetTextColor(facts.score >= 80 and 0.2 or 1, facts.score >= 60 and 1 or 0.2, 0.2)
+    end)
+
+    pullFrame:Hide()
+    RestoreFramePosition(pullFrame)
+end
+
+-- ============================================================
 -- 3) COOLDOWN-TRACKER
 -- ============================================================
 
@@ -1919,6 +2151,13 @@ function FH:ApplyVisibility()
             ripSnapshotFrame:Show()
         end
     end
+    if pullFrame then
+        if FeralHelperDB.showPullAssistant == true then
+            pullFrame:Show()
+        else
+            pullFrame:Hide()
+        end
+    end
 end
 
 function FH:ShowPositionFrames()
@@ -1931,6 +2170,7 @@ function FH:ShowPositionFrames()
     if cdTracker and FeralHelperDB.showCDTracker ~= false then cdTracker:Show() end
     if roarRipFrame then roarRipFrame:Show() end
     if ripSnapshotFrame then ripSnapshotFrame:Show() end
+    if pullFrame then pullFrame:Show() end
 end
 
 -- ============================================================
@@ -2095,6 +2335,7 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         CreateCDTracker()
         CreateRoarRipFrame()
         CreateRipSnapshotFrame()
+        CreatePullAssistantFrame()
         CreateMinimapButton()
         UpdatePanicButtonMacro()
         FH:ApplyVisibility()
@@ -2110,6 +2351,7 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         end
 
     elseif event == "PLAYER_REGEN_DISABLED" then
+        StartPullAttempt()
         if ripSnapshotFrame and FeralHelperDB.showRipSnapshot ~= false then
             ripSnapshotFrame.combatPreviewActive = true
             ripSnapshotFrame.pullStartTime = GetTime()
@@ -2145,6 +2387,10 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         if panicMacroNeedsUpdate then
             UpdatePanicButtonMacro()
         end
+        if pullState.active and not pullState.reported and PullTrainerEnabled() then
+            FinishPullEvaluation(true)
+        end
+        pullState.active = nil
 
     elseif event == "PLAYER_EQUIPMENT_CHANGED" then
         UpdatePanicButtonMacro()
@@ -2185,6 +2431,11 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
            and srcGUID == UnitGUID("player")
            and spellId == SPELLID_RIP then
             ripSnapshot = CaptureRipSnapshot()
+        end
+
+        if subevent == "SPELL_CAST_SUCCESS"
+           and srcGUID == UnitGUID("player") then
+            RecordPullCast(spellId, spellName)
         end
     end
 end)
@@ -2281,6 +2532,27 @@ SlashCmdList["FERALHELPER"] = function(msg)
         m:AddMessage("  T10 Slots: " .. y .. GetFeralT10DebugText() .. r)
         m:AddMessage("  showRoarRipWarning: " .. y .. tostring(FeralHelperDB.showRoarRipWarning) .. r)
         m:AddMessage("  showRipSnapshot: " .. y .. tostring(FeralHelperDB.showRipSnapshot) .. r)
+    elseif msg == "pull" then
+        local m = DEFAULT_CHAT_FRAME
+        local y = "|cffffff00"; local r = "|r"; local g = "|cff33ff99"
+        local facts = GetPullFacts()
+        local elapsed = pullState.active and pullState.startTime and (GetTime() - pullState.startTime) or 0
+        m:AddMessage(g .. "FeralHelper Pull:" .. r)
+        m:AddMessage("  Modul: " .. y .. tostring(PullAssistantEnabled()) .. r
+            .. "  Trainer: " .. y .. tostring(PullTrainerEnabled()) .. r
+            .. "  MaxWait: " .. y .. GetPullMaxWait() .. "s" .. r)
+        m:AddMessage("  Score: " .. y .. facts.score .. "/100" .. r
+            .. "  Next: " .. y .. PullNextStep(facts, elapsed) .. r)
+        m:AddMessage("  SR: " .. y .. tostring(facts.sr) .. r
+            .. "  Mangle: " .. y .. tostring(facts.mangle) .. r
+            .. "  TF: " .. y .. tostring(facts.tf) .. r
+            .. "  TF ready: " .. y .. tostring(facts.tfReady) .. r)
+        m:AddMessage("  T1: " .. y .. (facts.t1.active and "PROC" or (facts.t1.ready and "ready" or ("CD " .. math.floor(facts.t1.cd or 0)))) .. r
+            .. "  T2: " .. y .. (facts.t2.active and "PROC" or (facts.t2.ready and "ready" or ("CD " .. math.floor(facts.t2.cd or 0)))) .. r)
+        if pullState.firstRip then
+            m:AddMessage("  Letzter erster Rip: " .. y .. pullState.firstRip.score .. "/100 nach "
+                .. math.floor(pullState.firstRip.elapsed * 10) / 10 .. "s" .. r)
+        end
     else
         FH:CreateConfigFrame()
     end

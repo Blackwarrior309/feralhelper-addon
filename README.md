@@ -68,6 +68,7 @@ Das Panik-Icon zeigt `T10`, wenn der 4er erkannt wurde. Der Tooltip und `/fh deb
 | Freizaubern | Erscheint bei Omen-of-Clarity-Proc |
 | Roar+Rip Warnung | Experimentell; warnt, wenn Savage Roar und Rip gleichzeitig ablaufen |
 | Rip Snapshot | Experimentell; Rip-Restdauer, Snapshot-Vergleich, Pull-Modus und Recast-Empfehlung |
+| Pull-Assist | Separates Modul fuer Start-Rota, Burst-Fenster und Pull-Training |
 
 ---
 
@@ -129,6 +130,47 @@ Die grosse Zahl im Rip-Icon zeigt dann ebenfalls die Restzeit des hoechsten Snap
 
 ---
 
+## Pull-Assist Modul und Burst Trainer
+
+Separat aktivierbar ueber `/fh` unter Katzenrotation:
+
+- `Pull-Assist Modul`: zeigt einen eigenen Pull-Frame mit Status, naechstem Schritt und Snapshot-Score.
+- `Pull-Rota Burst Trainer`: bewertet den Pull nach dem ersten Rip und meldet erkannte Fehler im Chat.
+
+### Pull-Assist Status
+
+| Status | Bedeutung |
+|--------|-----------|
+| `PREP` | Vor dem Kampf: Ziel, Katzenform, SR/Mangle/TF/Trinkets pruefen |
+| `WAIT` | Kampf laeuft, aber ein besseres Startfenster wird noch erwartet |
+| `RIP NOW` | Pflichtbedingungen sind aktiv; Rip setzen |
+| `SNAPSHOT OK` | Erster Rip ist gesetzt und wird bewertet |
+
+Der Score geht bis 100 Punkte. Bewertet werden Savage Roar, Mangle/Trauma, Tigerwut, Trinket-Procs, Hysteria und Tricks. Der Frame zeigt ausserdem den naechsten sinnvollen Schritt, z.B. `Mangle/Trauma setzen`, `Savage Roar aufbauen`, `Tigerwut nutzen`, `kurz auf Procs warten` oder `Rip setzen`.
+
+### Burst Trainer
+
+Der Trainer erkennt haeufige Pull-Fehler:
+
+- Pull nicht in Katzenform gestartet
+- Rip ohne Mangle/Trauma
+- Rip ohne Savage Roar
+- Tigerwut war bereit, aber beim Rip nicht aktiv
+- Trinket-Procs nicht abgewartet, obwohl Trinkets bereit waren
+- erster Rip sehr spaet
+
+Nach dem ersten Rip erscheint eine kurze Bewertung:
+
+```text
+FeralHelper Pull-Trainer: Score 80/100 nach 6.2s
+Snapshot: TF Trinket
+- Tigerwut war bereit, aber beim Rip nicht aktiv
+```
+
+Mit `/fh pull` kannst du den aktuellen Pull-Status, Score, Trinket-Zustand und die letzte Bewertung im Chat anzeigen.
+
+---
+
 ## Slash Commands
 
 | Befehl | Funktion |
@@ -139,6 +181,7 @@ Die grosse Zahl im Rip-Icon zeigt dann ebenfalls die Restzeit des hoechsten Snap
 | `/fh icons` | Icon-Test: alle Icons sichtbar |
 | `/fh test` | Roar+Rip und Rip-Snapshot Test-Ansicht |
 | `/fh debug` | Debug-Info: Formstatus, Buff-Zeiten |
+| `/fh pull` | Pull-Assist Debug: Score, naechster Schritt, Trinket-Status |
 
 ---
 
@@ -162,7 +205,7 @@ Die grosse Zahl im Rip-Icon zeigt dann ebenfalls die Restzeit des hoechsten Snap
 ### Standardwerte
 
 - Anzeige aktiv: Hysteria-Frame, Clearcast-Frame, CD-Leiste
-- Experimentell und standardmaessig aus: Roar+Rip-Warnung, Rip-Snapshot/Pull-Modus
+- Experimentell und standardmaessig aus: Roar+Rip-Warnung, Rip-Snapshot/Pull-Modus, Pull-Assist, Pull-Trainer
 - Automatische Kampf-/CD-Whisper fuer Boesartigkeit: aus
 - Whisper per Klick auf das Hysteria-Frame: an
 - Anregen-Whisper beim Cast: an
