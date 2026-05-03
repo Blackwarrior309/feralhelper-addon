@@ -791,7 +791,7 @@ local function CreateCDIcon(parent, texture, label)
 end
 
 local function CreateCDTracker()
-    cdTracker = CreateMovableFrame("FeralHelperCDTracker", 690, 60,
+    cdTracker = CreateMovableFrame("FeralHelperCDTracker", 650, 60,
         { "CENTER", UIParent, "CENTER", 0, -150 })
 
     local bg = cdTracker:CreateTexture(nil, "BACKGROUND")
@@ -818,6 +818,15 @@ local function CreateCDTracker()
     local _, _, bloodDrainIcon   = GetSpellInfo(64568)
     local _, _, executionerIcon  = GetSpellInfo(42976)
     local _, _, crusaderIcon     = GetSpellInfo(20007)
+
+    local cloakProcs = {
+        { spellId=55637, icd=60, label="Lightweave" },
+        { spellId=55776, icd=55, label="Schwertwallgarn" },
+    }
+    for _, p in ipairs(cloakProcs) do
+        local _, _, t = GetSpellInfo(p.spellId)
+        p.tex = t
+    end
 
     local weaponProcs = {
         { spellId=59626, icd=35, label="Black Magic" },
@@ -851,10 +860,8 @@ local function CreateCDTracker()
           procSpell=GetSpellInfo(SPELLID_NITRO), clickUseSlot=SLOT_FEET },
         { key="weaponvz",   tex="Interface\\Icons\\INV_Weapon_ShortBlade_30",
           label="Waffe VZ", type="weapon-enchant", procs=weaponProcs, hideWhenInactive=true },
-        { key="lightweave",   tex=lightwaveIcon   or "Interface\\Icons\\Trade_Tailoring",
-          label="Lightweave",   type="aura", spellId=55637, icd=60, hideWhenInactive=true },
-        { key="schwertgarn",  tex=schwertgarnIcon or "Interface\\Icons\\Trade_Tailoring",
-          label="Schwertwallgarn", type="aura", spellId=55776, icd=55, hideWhenInactive=true },
+        { key="cloakvz", tex="Interface\\Icons\\Trade_Tailoring",
+          label="Mantel VZ", type="weapon-enchant", procs=cloakProcs, hideWhenInactive=true },
         { key="ring1", tex="Interface\\Icons\\INV_Misc_QuestionMark",
           label="Ring 1", type="item-slot", slot=11, procOnly=true },
         { key="ring2", tex="Interface\\Icons\\INV_Misc_QuestionMark",
