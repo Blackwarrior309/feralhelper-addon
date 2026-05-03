@@ -723,10 +723,34 @@ local function CreateRipSnapshotFrame()
         local now = GetTime()
         local ripExp = GetOwnRipOnTarget()
         if not ripExp then
-            ripSnapshot = nil
+            ripSnapshot    = nil
+            self.prevRipExp = nil
             self:Hide(); return
         end
         if FeralHelperDB.showRipSnapshot == false then self:Hide(); return end
+
+        -- Neuen Rip-Cast erkennen: expiry springt deutlich nach oben
+        if not self.prevRipExp or ripExp > self.prevRipExp + 5 then
+            local _, _, _, tf2   = GetAuraInfoById("player", 5217, "HELPFUL")
+            local _, _, _, roar2 = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
+            local _, _, _, hyst2 = GetAuraInfoById("player", 49016, "HELPFUL")
+            local _, _, _, tot2  = GetAuraInfo("player", "Tricks of the Trade", "HELPFUL")
+            local b2, p2         = UnitAttackPower("player")
+            local mgl2           = false
+            if UnitExists("target") then
+                mgl2 = GetAuraInfo("target", "Mangle", "HARMFUL") ~= nil
+                    or GetAuraInfo("target", "Trauma", "HARMFUL") ~= nil
+            end
+            ripSnapshot = {
+                tfActive       = tf2   ~= nil,
+                roarActive     = roar2 ~= nil,
+                hysteriaActive = hyst2 ~= nil,
+                totActive      = tot2  ~= nil,
+                mangleActive   = mgl2,
+                ap             = (b2 or 0) + (p2 or 0),
+            }
+        end
+        self.prevRipExp = ripExp
 
         self:Show()
 
