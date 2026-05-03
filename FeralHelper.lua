@@ -177,6 +177,9 @@ end
 -- Merkt sich ob Ueberlebensinstinkte gerade aktiv sind (fuer /say-Detection)
 local survInstExpiry = nil
 
+-- Rip-Snapshot: gespeicherte Buff-Konstellation zum Cast-Zeitpunkt
+local ripSnapshot = nil
+
 -- Icon-Pfade fuer Ingi-Tinker (per SpellID - egal was auf Slot liegt)
 local SPELLID_HYPERSPEED = 54758
 local SPELLID_NITRO      = 54861
@@ -649,7 +652,7 @@ end
 
 local ripSnapshotFrame
 local function CreateRipSnapshotFrame()
-    ripSnapshotFrame = CreateMovableFrame("FeralHelperRipSnapshotFrame", 110, 80,
+    ripSnapshotFrame = CreateMovableFrame("FeralHelperRipSnapshotFrame", 210, 135,
         { "CENTER", UIParent, "CENTER", 200, 0 })
 
     local _, _, ripIcon = GetSpellInfo(SPELLID_RIP)
@@ -692,6 +695,22 @@ local function CreateRipSnapshotFrame()
     tfLabel:SetTextColor(0.8, 1, 0.2)
     ripSnapshotFrame.tfLabel = tfLabel
 
+    local snapLabel = ripSnapshotFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    snapLabel:SetPoint("BOTTOM", ripSnapshotFrame, "BOTTOM", 0, 4)
+    snapLabel:SetJustifyH("CENTER")
+    ripSnapshotFrame.snapLabel = snapLabel
+
+    local snapStatsLabel = ripSnapshotFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    snapStatsLabel:SetPoint("TOPLEFT", iconRip, "BOTTOMLEFT", 0, -6)
+    snapStatsLabel:SetJustifyH("LEFT")
+    snapStatsLabel:SetTextColor(0.6, 0.6, 0.6)
+    ripSnapshotFrame.snapStatsLabel = snapStatsLabel
+
+    local curStatsLabel = ripSnapshotFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    curStatsLabel:SetPoint("TOPLEFT", snapStatsLabel, "BOTTOMLEFT", 0, -2)
+    curStatsLabel:SetJustifyH("LEFT")
+    ripSnapshotFrame.curStatsLabel = curStatsLabel
+
     local elapsed = 0
     ripSnapshotFrame:SetScript("OnUpdate", function(self, e)
         elapsed = elapsed + e
@@ -703,7 +722,10 @@ local function CreateRipSnapshotFrame()
 
         local now = GetTime()
         local ripExp = GetOwnRipOnTarget()
-        if not ripExp then self:Hide(); return end
+        if not ripExp then
+            ripSnapshot = nil
+            self:Hide(); return
+        end
         if FeralHelperDB.showRipSnapshot == false then self:Hide(); return end
 
         self:Show()
@@ -711,14 +733,111 @@ local function CreateRipSnapshotFrame()
         local ripRem = math.max(0, ripExp - now)
         self.timerRip:SetText(math.floor(ripRem))
 
-        local _, _, _, tfExp = GetAuraInfoById("player", 5217, "HELPFUL")
-        local tfActive = tfExp ~= nil
+        -- Aktuelle Buff-Werte (immer berechnen, für Anzeige + Vergleich)
+        local _, _, _, tfExp   = GetAuraInfoById("player", 5217, "HELPFUL")
+        local _, _, _, roarExp = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
+        local _, _, _, hystExp = GetAuraInfoById("player", 49016, "HELPFUL")
+        local _, _, _, totExp  = GetAuraInfo("player", "Tricks of the Trade", "HELPFUL")
+        local base, pos        = UnitAttackPower("player")
+        local curAP            = (base or 0) + (pos or 0)
+        local tfActive         = tfExp   ~= nil
+        local roarActive       = roarExp ~= nil
+        local hysteriaActive   = hystExp ~= nil
+        local totActive        = totExp  ~= nil
+        local curMangle        = false
+        if UnitExists("target") then
+            curMangle = GetAuraInfo("target", "Mangle", "HARMFUL") ~= nil
+                     or GetAuraInfo("target", "Trauma", "HARMFUL") ~= nil
+        end
         local tfRem = tfActive and math.max(0, tfExp - now) or 0
 
         self.iconTF:SetAlpha(tfActive and 1.0 or 0.2)
         self.tfLabel:SetText(tfActive and ("TF: " .. math.floor(tfRem) .. "s") or "")
 
-        if tfActive and ripRem <= RIP_RECAST_THRESH then
+        -- Stats-Anzeige: Snap vs. Cur
+        local function boolStr(b)
+            return b and "|cff00cc00+|r" or "|cffff4444-|r"
+        end
+        if ripSnapshot then
+            local apDiff = curAP - ripSnapshot.ap
+            local apDiffStr = ""
+            if apDiff > 0 then
+                apDiffStr = " |cff00cc00+" .. apDiff .. "|r"
+            elseif apDiff < 0 then
+                apDiffStr = " |cffff4444" .. apDiff .. "|r"
+            end
+            self.snapStatsLabel:SetText(
+                "S TF" .. boolStr(ripSnapshot.tfActive) ..
+                "SR" .. boolStr(ripSnapshot.roarActive) ..
+                "H" .. boolStr(ripSnapshot.hysteriaActive) ..
+                "T" .. boolStr(ripSnapshot.totActive) ..
+                "M" .. boolStr(ripSnapshot.mangleActive) ..
+                " " .. ripSnapshot.ap)
+            self.curStatsLabel:SetText(
+                "C TF" .. boolStr(tfActive) ..
+                "SR" .. boolStr(roarActive) ..
+                "H" .. boolStr(hysteriaActive) ..
+                "T" .. boolStr(totActive) ..
+                "M" .. boolStr(curMangle) ..
+                " " .. curAP .. apDiffStr)
+        else
+            self.snapStatsLabel:SetText("|cff888888kein Snapshot|r")
+            self.curStatsLabel:SetText(
+                "TF" .. boolStr(tfActive) ..
+                " SR" .. boolStr(roarActive) ..
+                " H" .. boolStr(hysteriaActive) ..
+                " T" .. boolStr(totActive) ..
+                " M" .. boolStr(curMangle) ..
+                " " .. curAP)
+        end
+
+        -- Snapshot-Vergleich: Wäre Recast jetzt besser?
+        local snapBetter   = false
+        local advantageSec = nil
+        self.snapLabel:SetText("")
+
+        if ripSnapshot then
+            local tfBetter      = tfActive      and not ripSnapshot.tfActive
+            local roarBetter    = roarActive    and not ripSnapshot.roarActive
+            local hystBetter    = hysteriaActive and not ripSnapshot.hysteriaActive
+            local totBetter     = totActive     and not ripSnapshot.totActive
+            local mangleBetter  = curMangle     and not ripSnapshot.mangleActive
+            local apBetter      = curAP > ripSnapshot.ap + 300
+
+            if tfBetter or roarBetter or hystBetter or totBetter or mangleBetter or apBetter then
+                snapBetter = true
+                local advEnd = math.huge
+                if tfBetter   and tfExp   then advEnd = math.min(advEnd, tfExp)   end
+                if roarBetter and roarExp then advEnd = math.min(advEnd, roarExp) end
+                if hystBetter and hystExp then advEnd = math.min(advEnd, hystExp) end
+                if totBetter  and totExp  then advEnd = math.min(advEnd, totExp)  end
+                if advEnd < math.huge then
+                    advantageSec = math.max(0, math.floor(advEnd - now))
+                end
+            end
+        end
+
+        if snapBetter then
+            if ripRem <= RIP_RECAST_THRESH then
+                self.snapLabel:SetText("\226\134\145 JETZT CASTEN!")
+                self.snapLabel:SetTextColor(1, 0.3, 0)
+            elseif advantageSec then
+                self.snapLabel:SetText("\226\134\145 NEU RIP: " .. advantageSec .. "s")
+                self.snapLabel:SetTextColor(1, 0.85, 0)
+            else
+                self.snapLabel:SetText("\226\134\145 NEU RIP (AP)")
+                self.snapLabel:SetTextColor(1, 0.85, 0)
+            end
+        end
+
+        if snapBetter and ripRem <= RIP_RECAST_THRESH then
+            self.stateLabel:SetText("JETZT!")
+            self.stateLabel:SetTextColor(1, 0.1, 0.1)
+            self.timerRip:SetTextColor(1, 0.1, 0.1)
+            self.border:SetVertexColor(1, 0.3, 0)
+            self.border:SetAlpha(0.6 + 0.4 * math.sin(self.t * 6))
+            self.border:Show()
+        elseif tfActive and ripRem <= RIP_RECAST_THRESH then
             self.stateLabel:SetText("JETZT!")
             self.stateLabel:SetTextColor(1, 0.1, 0.1)
             self.timerRip:SetTextColor(1, 0.1, 0.1)
@@ -1572,13 +1691,36 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
         -- WICHTIG: arg1 = timestamp, "..." beginnt bei subevent
         -- (nicht nochmal timestamp aus "..." entpacken - das war der Bug)
-        local subevent, _, srcName, _,
+        local subevent, srcGUID, srcName, _,
               destGUID, destName, _, spellId, spellName = ...
 
         if subevent == "SPELL_AURA_APPLIED"
            and destGUID == UnitGUID("player")
            and (spellId == 49016 or spellName == SPELL_HYSTERIA) then
             StartHysteriaCooldown()
+        end
+
+        if subevent == "SPELL_CAST_SUCCESS"
+           and srcGUID == UnitGUID("player")
+           and spellId == SPELLID_RIP then
+            local _, _, _, tfExp   = GetAuraInfoById("player", 5217, "HELPFUL")
+            local _, _, _, roarExp = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
+            local _, _, _, hystExp = GetAuraInfoById("player", 49016, "HELPFUL")
+            local _, _, _, totExp  = GetAuraInfo("player", "Tricks of the Trade", "HELPFUL")
+            local base, pos        = UnitAttackPower("player")
+            local mangleSnap = false
+            if UnitExists("target") then
+                mangleSnap = GetAuraInfo("target", "Mangle", "HARMFUL") ~= nil
+                          or GetAuraInfo("target", "Trauma", "HARMFUL") ~= nil
+            end
+            ripSnapshot = {
+                tfActive       = tfExp   ~= nil,
+                roarActive     = roarExp ~= nil,
+                hysteriaActive = hystExp ~= nil,
+                totActive      = totExp  ~= nil,
+                mangleActive   = mangleSnap,
+                ap             = (base or 0) + (pos or 0),
+            }
         end
     end
 end)
