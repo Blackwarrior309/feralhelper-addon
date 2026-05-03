@@ -855,13 +855,14 @@ local function CreateCDTracker()
         { key="trinket1",    tex="Interface\\Icons\\INV_Misc_QuestionMark", label="Trinket 1", type="item-slot", slot=SLOT_TRINKET1 },
         { key="trinket2",    tex="Interface\\Icons\\INV_Misc_QuestionMark", label="Trinket 2", type="item-slot", slot=SLOT_TRINKET2 },
         { key="hands", tex=hyperspeedIcon, label="Hyperspeed", type="item-slot", slot=SLOT_HANDS, noAutoIcon=true,
-          procSpell=GetSpellInfo(SPELLID_HYPERSPEED), clickUseSlot=SLOT_HANDS },
+          procSpell=GetSpellInfo(SPELLID_HYPERSPEED), clickUseSlot=SLOT_HANDS, ingiEnchantId=3604 },
         { key="feet",  tex=nitroIcon,      label="Nitro",       type="item-slot", slot=SLOT_FEET,  noAutoIcon=true,
-          procSpell=GetSpellInfo(SPELLID_NITRO), clickUseSlot=SLOT_FEET },
-        { key="weaponvz",   tex="Interface\\Icons\\INV_Weapon_ShortBlade_30",
+          procSpell=GetSpellInfo(SPELLID_NITRO), clickUseSlot=SLOT_FEET, ingiEnchantId=3606 },
+        { key="cloakvz", tex="Interface\\Icons\\INV_Misc_Parachute",
+          label="Mantel VZ", type="weapon-enchant", procs=cloakProcs, hideWhenInactive=true,
+          ingiEnchantId=3860, ingiSlot=SLOT_BACK, clickUseSlot=SLOT_BACK },
+        { key="weaponvz", tex="Interface\\Icons\\INV_Weapon_ShortBlade_30",
           label="Waffe VZ", type="weapon-enchant", procs=weaponProcs, hideWhenInactive=true },
-        { key="cloakvz", tex="Interface\\Icons\\Trade_Tailoring",
-          label="Mantel VZ", type="weapon-enchant", procs=cloakProcs, hideWhenInactive=true },
         { key="ring1", tex="Interface\\Icons\\INV_Misc_QuestionMark",
           label="Ring 1", type="item-slot", slot=11, procOnly=true },
         { key="ring2", tex="Interface\\Icons\\INV_Misc_QuestionMark",
@@ -1060,6 +1061,16 @@ local function CreateCDTracker()
                 end
 
             elseif ent.type == "item-slot" then
+                -- Ingi-Enchant Pflicht: Icon nur zeigen wenn VZ auf Item
+                if ent.ingiEnchantId then
+                    local link = GetInventoryItemLink("player", ent.slot)
+                    local eId  = link and tonumber(link:match("item:%d+:(%d+)"))
+                    if eId ~= ent.ingiEnchantId then
+                        icon:Hide()
+                        CooldownFrame_SetTimer(icon.cd, 0, 0, 0)
+                        break
+                    end
+                end
                 -- Icon dynamisch vom Item holen (nicht bei Ingi-Tinkern)
                 if not ent.noAutoIcon then
                     local itemTex = GetInventoryItemTexture("player", ent.slot)
@@ -1205,43 +1216,71 @@ local function CreateCDTracker()
                     end
                 end
             elseif ent.type == "weapon-enchant" then
-                local activeProc = nil
-                for _, p in ipairs(ent.procs) do
-                    local _, _, _, exp = GetAuraInfoById("player", p.spellId, "HELPFUL")
-                    if exp then activeProc = { exp=exp, icd=p.icd, tex=p.tex }; break end
+                -- Ingi-Enchant Modus: dauerhaft sichtbar + CD-Anzeige
+                local ingiActive = false
+                if ent.ingiEnchantId and ent.ingiSlot then
+                    local link = GetInventoryItemLink("player", ent.ingiSlot)
+                    local eId  = link and tonumber(link:match("item:%d+:(%d+)"))
+                    ingiActive = (eId == ent.ingiEnchantId)
                 end
-                if activeProc then
-                    if activeProc.tex then icon.icon:SetTexture(activeProc.tex) end
-                    icon.weProcActive = true
-                    icon.weActiveIcd  = activeProc.icd
+                if ingiActive then
+                    local tex = GetInventoryItemTexture("player", ent.ingiSlot)
+                    if tex then icon.icon:SetTexture(tex) end
+                    icon.weProcActive = false
                     icon.synthCDEnd   = nil
                     icon:Show()
-                    icon:SetAlpha(1.0)
-                    icon.timer:SetText(math.floor(activeProc.exp - GetTime()))
-                    icon.border:SetVertexColor(0, 1, 0.2)
-                    icon.border:SetAlpha(0.6 + 0.4 * math.sin(cdTime * 6))
-                    icon.border:Show()
-                else
-                    if icon.weProcActive then
-                        icon.weProcActive = false
-                        if icon.weActiveIcd and icon.weActiveIcd > 0 then
-                            icon.synthCDEnd = GetTime() + icon.weActiveIcd
-                        end
-                        icon.weActiveIcd = nil
-                    end
-                    local synthCD = icon.synthCDEnd and icon.synthCDEnd > GetTime()
-                    if synthCD then
-                        icon:Show()
+                    icon.border:Hide()
+                    local start, dur, enabled = GetInventoryItemCooldown("player", ent.ingiSlot)
+                    if start and dur and dur > 1.5 then
                         icon:SetAlpha(0.4)
-                        icon.timer:SetText(math.floor(icon.synthCDEnd - GetTime()))
-                        icon.border:Hide()
-                    elseif ent.hideWhenInactive then
-                        icon:Hide()
-                        icon.synthCDEnd = nil
+                        icon.timer:SetText(math.floor(start + dur - GetTime()))
+                        CooldownFrame_SetTimer(icon.cd, start, dur, enabled)
                     else
-                        icon:SetAlpha(0.4)
+                        icon:SetAlpha(1.0)
                         icon.timer:SetText("")
-                        icon.border:Hide()
+                        CooldownFrame_SetTimer(icon.cd, 0, 0, 0)
+                    end
+                else
+                    -- Kein Ingi-Enchant: Proc-Erkennung (Schneider-VZ etc.)
+                    CooldownFrame_SetTimer(icon.cd, 0, 0, 0)
+                    local activeProc = nil
+                    for _, p in ipairs(ent.procs) do
+                        local _, _, _, exp = GetAuraInfoById("player", p.spellId, "HELPFUL")
+                        if exp then activeProc = { exp=exp, icd=p.icd, tex=p.tex }; break end
+                    end
+                    if activeProc then
+                        if activeProc.tex then icon.icon:SetTexture(activeProc.tex) end
+                        icon.weProcActive = true
+                        icon.weActiveIcd  = activeProc.icd
+                        icon.synthCDEnd   = nil
+                        icon:Show()
+                        icon:SetAlpha(1.0)
+                        icon.timer:SetText(math.floor(activeProc.exp - GetTime()))
+                        icon.border:SetVertexColor(0, 1, 0.2)
+                        icon.border:SetAlpha(0.6 + 0.4 * math.sin(cdTime * 6))
+                        icon.border:Show()
+                    else
+                        if icon.weProcActive then
+                            icon.weProcActive = false
+                            if icon.weActiveIcd and icon.weActiveIcd > 0 then
+                                icon.synthCDEnd = GetTime() + icon.weActiveIcd
+                            end
+                            icon.weActiveIcd = nil
+                        end
+                        local synthCD = icon.synthCDEnd and icon.synthCDEnd > GetTime()
+                        if synthCD then
+                            icon:Show()
+                            icon:SetAlpha(0.4)
+                            icon.timer:SetText(math.floor(icon.synthCDEnd - GetTime()))
+                            icon.border:Hide()
+                        elseif ent.hideWhenInactive then
+                            icon:Hide()
+                            icon.synthCDEnd = nil
+                        else
+                            icon:SetAlpha(0.4)
+                            icon.timer:SetText("")
+                            icon.border:Hide()
+                        end
                     end
                 end
             end
