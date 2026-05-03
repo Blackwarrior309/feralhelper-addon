@@ -57,6 +57,8 @@ Der synthetische ICD startet beim Proc-Start und laeuft im Hintergrund weiter. S
 
 Der Panik-Knopf wirkt Baerengestalt, entfernt Hysteria, wirkt Baumrinde und danach Ueberlebensinstinkte. Wutanfall wird nur in das Macro aufgenommen, wenn mindestens 4 Teile des Feral-T10-Sets `Lasherweave Battlegear` getragen werden. Ohne diesen Setbonus wird Wutanfall ausgelassen, damit der Armor-Nachteil nicht versehentlich im Panik-Macro landet.
 
+Das Panik-Icon zeigt `T10`, wenn der 4er erkannt wurde. Der Tooltip und `/fh debug` zeigen ebenfalls, ob Wutanfall im Macro aktiv ist.
+
 ### Weitere Frames
 
 | Frame | Funktion |
@@ -98,7 +100,7 @@ C TF+SR+H+T-M+  5100 +580
 - `JETZT: Xs`: Rip ist im Recast-Fenster und der bessere Snapshot laeuft in X Sekunden aus.
 - `NEU RIP (AP)`: AP ist besser, aber fuer den Vorteil ist keine sichere Ablaufzeit bekannt.
 
-Der Countdown beruecksichtigt Tigerwut, Savage Roar, Hysteria, Tricks und erkannte Trinket-Procs. Wenn ein Buff oder Proc auslaeuft und der Snapshot dadurch schlechter wird, zeigt das Frame die verbleibende Zeit bis zu diesem Ablauf.
+Der Countdown beruecksichtigt Tigerwut, Savage Roar, Hysteria, Tricks und erkannte Trinket-Procs. Wenn ein Buff oder Proc auslaeuft und der Snapshot dadurch schlechter wird, zeigt das Frame die verbleibende Zeit bis zu diesem Ablauf. Eine kurze Ursachenzeile zeigt, warum ein neuer Rip besser waere, z.B. `TF Trinket AP+500`.
 
 ---
 
@@ -154,6 +156,7 @@ Die grosse Zahl im Rip-Icon zeigt dann ebenfalls die Restzeit des hoechsten Snap
 - Minimap-Icon Rechtsklick: Frames sperren/entsperren
 - Minimap-Icon ziehen: Position anpassen
 - Alle Frames sind per Drag verschiebbar, solange sie nicht gesperrt sind.
+- `Frames anzeigen`: blendet Positions-Frames kurz als Vorschau ein.
 - Button `Standard laden` oder `/fh defaults`: setzt raid-sichere Standardwerte und behaelt Frame-Positionen.
 
 ### Standardwerte

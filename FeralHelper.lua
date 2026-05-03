@@ -232,6 +232,26 @@ local function HasFeralT104p()
     return pieces >= 4
 end
 
+local function GetFeralT10PieceCount()
+    local pieces = 0
+    for _, slot in ipairs(FERAL_T10_SLOTS) do
+        local itemId = GetInventoryItemID("player", slot)
+        if itemId and FERAL_T10_ITEM_IDS[itemId] then
+            pieces = pieces + 1
+        end
+    end
+    return pieces
+end
+
+local function GetFeralT10DebugText()
+    local parts = {}
+    for _, slot in ipairs(FERAL_T10_SLOTS) do
+        local itemId = GetInventoryItemID("player", slot)
+        parts[#parts + 1] = tostring(slot) .. "=" .. tostring(itemId or "-")
+    end
+    return table.concat(parts, " ")
+end
+
 -- ============================================================
 -- Hilfsfunktionen
 -- ============================================================
@@ -777,6 +797,21 @@ local function CreateRoarRipFrame()
         elapsed = 0
         self.t = (self.t or 0) + e
 
+        if FH.positionPreviewUntil and FH.positionPreviewUntil > GetTime() then
+            self:Show()
+            self.timerRoar:SetText("5")
+            self.timerRip:SetText("4")
+            self.timerRoar:SetTextColor(1, 0.5, 0)
+            self.timerRip:SetTextColor(1, 0.5, 0)
+            self.borderRoar:SetVertexColor(1, 0.3, 0)
+            self.borderRoar:SetAlpha(0.8)
+            self.borderRoar:Show()
+            self.borderRip:SetVertexColor(1, 0.3, 0)
+            self.borderRip:SetAlpha(0.8)
+            self.borderRip:Show()
+            return
+        end
+
         if not IsInCatForm() then self:Hide(); return end
 
         local now = GetTime()
@@ -873,6 +908,12 @@ local function CreateRipSnapshotFrame()
     snapLabel:SetJustifyH("CENTER")
     ripSnapshotFrame.snapLabel = snapLabel
 
+    local reasonLabel = ripSnapshotFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    reasonLabel:SetPoint("BOTTOM", snapLabel, "TOP", 0, 2)
+    reasonLabel:SetJustifyH("CENTER")
+    reasonLabel:SetTextColor(0.8, 0.8, 0.8)
+    ripSnapshotFrame.reasonLabel = reasonLabel
+
     local snapStatsLabel = ripSnapshotFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     snapStatsLabel:SetPoint("TOPLEFT", iconRip, "BOTTOMLEFT", 0, -6)
     snapStatsLabel:SetJustifyH("LEFT")
@@ -892,6 +933,25 @@ local function CreateRipSnapshotFrame()
         self.t = (self.t or 0) + e
 
         if FH.ripTestMode then return end  -- Test-Modus: OnUpdate nicht überschreiben
+
+        if FH.positionPreviewUntil and FH.positionPreviewUntil > GetTime() then
+            self:Show()
+            self.timerRip:SetText("12")
+            self.timerRip:SetTextColor(0.2, 1, 0.2)
+            self.stateLabel:SetText("Vorschau")
+            self.stateLabel:SetTextColor(0.2, 1, 0.2)
+            self.iconTF:SetAlpha(1.0)
+            self.tfLabel:SetText("TF: 8s")
+            self.reasonLabel:SetText("TF Trinket AP+500")
+            self.snapStatsLabel:SetText("S TF-SR+H-T-M+ 4500")
+            self.curStatsLabel:SetText("C TF+SR+H-T-M+ 5000 |cff00cc00+500|r")
+            self.snapLabel:SetText("NEU RIP: 8s")
+            self.snapLabel:SetTextColor(1, 0.85, 0)
+            self.border:SetVertexColor(0, 1, 0.2)
+            self.border:SetAlpha(0.6)
+            self.border:Show()
+            return
+        end
 
         local now = GetTime()
         local ripExp = GetOwnRipOnTarget()
@@ -970,6 +1030,7 @@ local function CreateRipSnapshotFrame()
                     " T" .. boolStr(totActive) ..
                     " M" .. boolStr(curMangle) ..
                     " " .. curAP)
+                self.reasonLabel:SetText("")
                 if ripRecommended then
                     if bestUntil then
                         self.snapLabel:SetText("RIP snapshot: " .. math.max(0, math.floor(bestUntil)) .. "s")
@@ -1022,6 +1083,7 @@ local function CreateRipSnapshotFrame()
                 " M"  .. bs(mA) ..
                 " " .. ap)
             self.snapLabel:SetText("")
+            self.reasonLabel:SetText("")
             self.border:Hide()
             return
         end
@@ -1101,6 +1163,7 @@ local function CreateRipSnapshotFrame()
         local advantageSec = nil
         local snapshotWindowSec = nil
         self.snapLabel:SetText("")
+        self.reasonLabel:SetText("")
 
         if ripSnapshot then
             local tfBetter      = tfActive      and not ripSnapshot.tfActive
@@ -1111,6 +1174,17 @@ local function CreateRipSnapshotFrame()
             local apBetter      = curAP > ripSnapshot.ap + 300
             local trinketBetter = (curTrinket1.active and not ripSnapshot.trinket1Active)
                                or (curTrinket2.active and not ripSnapshot.trinket2Active)
+            local reasons = {}
+            if tfBetter then reasons[#reasons + 1] = "TF" end
+            if roarBetter then reasons[#reasons + 1] = "SR" end
+            if hystBetter then reasons[#reasons + 1] = "Hysteria" end
+            if totBetter then reasons[#reasons + 1] = "Tricks" end
+            if mangleBetter then reasons[#reasons + 1] = "Mangle" end
+            if trinketBetter then reasons[#reasons + 1] = "Trinket" end
+            if apBetter then reasons[#reasons + 1] = "AP+" .. (curAP - ripSnapshot.ap) end
+            if #reasons > 0 then
+                self.reasonLabel:SetText(table.concat(reasons, " "))
+            end
 
             if tfBetter or roarBetter or hystBetter or totBetter or mangleBetter or apBetter or trinketBetter then
                 snapBetter = true
@@ -1220,6 +1294,10 @@ local function UpdatePanicButtonMacro()
     end
     panicMacroNeedsUpdate = nil
     panicButton:SetAttribute("macrotext", BuildPanicMacro())
+    panicButton.hasT10 = HasFeralT104p()
+    if panicButton.ownerIcon then
+        panicButton.ownerIcon.t10Label:SetText(panicButton.hasT10 and "T10" or "")
+    end
 end
 
 local function CreateCDIcon(parent, texture, label)
@@ -1358,6 +1436,30 @@ local function CreateCDTracker()
             btn:SetAllPoints(icon)
             btn:RegisterForClicks("AnyDown", "AnyUp")
             btn:SetAttribute("type", "macro")
+            btn.ownerIcon = icon
+            icon.t10Label = icon:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+            icon.t10Label:SetPoint("BOTTOM", icon, "BOTTOM", 0, 1)
+            icon.t10Label:SetTextColor(0.2, 1, 0.2)
+            icon.t10Label:SetText("")
+            local function ShowPanicTooltip()
+                GameTooltip:SetOwner(icon, "ANCHOR_RIGHT")
+                GameTooltip:AddLine("|cff33ff99Panik-Knopf|r")
+                GameTooltip:AddLine("Baer, Hysteria entfernen, Baumrinde, Ueberlebensinstinkte", 1, 1, 1)
+                if HasFeralT104p() then
+                    GameTooltip:AddLine("Feral T10 4er erkannt: Wutanfall aktiv", 0.2, 1, 0.2)
+                else
+                    GameTooltip:AddLine("Feral T10 4er fehlt: Wutanfall wird ausgelassen", 1, 0.35, 0.2)
+                end
+                GameTooltip:AddLine("T10-Teile: " .. GetFeralT10PieceCount() .. "/4", 1, 0.85, 0)
+                GameTooltip:Show()
+            end
+            local function HidePanicTooltip()
+                GameTooltip:Hide()
+            end
+            icon:SetScript("OnEnter", ShowPanicTooltip)
+            icon:SetScript("OnLeave", HidePanicTooltip)
+            btn:SetScript("OnEnter", ShowPanicTooltip)
+            btn:SetScript("OnLeave", HidePanicTooltip)
             panicButton = btn
             UpdatePanicButtonMacro()
         end
@@ -1819,6 +1921,18 @@ function FH:ApplyVisibility()
     end
 end
 
+function FH:ShowPositionFrames()
+    self.positionPreviewUntil = GetTime() + 20
+    if hysteriaFrame and FeralHelperDB.showHysteriaFrame ~= false then hysteriaFrame:Show() end
+    if vzFrame then
+        vzFrame:Show()
+        if vzFrame.timer then vzFrame.timer:SetText("8") end
+    end
+    if cdTracker and FeralHelperDB.showCDTracker ~= false then cdTracker:Show() end
+    if roarRipFrame then roarRipFrame:Show() end
+    if ripSnapshotFrame then ripSnapshotFrame:Show() end
+end
+
 -- ============================================================
 -- Minimap-Button
 -- ============================================================
@@ -1914,7 +2028,7 @@ local function ShowSetupGuide()
     m("                   " .. w .. "Trinket 1+2 (Proc grün / ICD gedimmt) / Handschuhe / Schuhe" .. r)
     m("                   " .. w .. "Schwertwallgarn + Berserker-VZ (nur sichtbar wenn aktiv)" .. r)
     m("  " .. y .. "Panik-Knopf" .. r     .. w .. "     1x klicken: Terrorbärengestalt + Baumrinde sofort," .. r)
-    m("                   " .. w .. "dann Wutanfall + Überlebensinstinkte nach 0.4s" .. r)
+    m("                   " .. w .. "Wutanfall nur mit Feral T10 4er, danach Ueberlebensinstinkte" .. r)
     m(y .. "───────────────────────────────" .. r)
     m(p .. w .. " Einstellungen unter " .. r .. y .. "/fh" .. r .. w .. " öffnen und Hysteria-Ziel setzen." .. r)
 end
@@ -2129,6 +2243,7 @@ SlashCmdList["FERALHELPER"] = function(msg)
                 ripSnapshotFrame.stateLabel:SetTextColor(0.2, 1, 0.2)
                 ripSnapshotFrame.iconTF:SetAlpha(1.0)
                 ripSnapshotFrame.tfLabel:SetText("TF: 8s")
+                ripSnapshotFrame.reasonLabel:SetText("TF Trinket AP+680")
                 ripSnapshotFrame.snapStatsLabel:SetText(
                     "S TF|cff00cc00+|rSR|cffff4444-|rH|cffff4444-|rT|cffff4444-|rM|cff00cc00+|r 4520")
                 ripSnapshotFrame.curStatsLabel:SetText(
@@ -2161,6 +2276,9 @@ SlashCmdList["FERALHELPER"] = function(msg)
         local _, _, _, tfExp = GetAuraInfo("player", SPELL_TIGERSFURY, "HELPFUL")
         m:AddMessage("  Tiger's Fury: "
             .. y .. (tfExp and math.floor(tfExp - GetTime()) .. "s" or "NICHT AKTIV") .. r)
+        m:AddMessage("  Feral T10: " .. y .. GetFeralT10PieceCount() .. "/4" .. r
+            .. "  Wutanfall im Panik-Macro: " .. y .. tostring(HasFeralT104p()) .. r)
+        m:AddMessage("  T10 Slots: " .. y .. GetFeralT10DebugText() .. r)
         m:AddMessage("  showRoarRipWarning: " .. y .. tostring(FeralHelperDB.showRoarRipWarning) .. r)
         m:AddMessage("  showRipSnapshot: " .. y .. tostring(FeralHelperDB.showRipSnapshot) .. r)
     else

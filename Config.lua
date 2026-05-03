@@ -97,6 +97,15 @@ local function MakeSectionLabel(parent, labelText, yOffset)
     return lbl
 end
 
+local function MakeHelpText(parent, text, yOffset)
+    local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    lbl:SetPoint("TOPLEFT", 30, yOffset)
+    lbl:SetWidth(350)
+    lbl:SetJustifyH("LEFT")
+    lbl:SetText(text)
+    return lbl
+end
+
 function FeralHelper:CreateConfigFrame(noShow)
     if self.configFrame then
         if not noShow then
@@ -107,7 +116,7 @@ function FeralHelper:CreateConfigFrame(noShow)
 
     local f = CreateFrame("Frame", "FeralHelperConfigFrame", UIParent)
     f.name = "FeralHelper"
-    f:SetSize(410, 760)
+    f:SetSize(410, 800)
     f:SetPoint("CENTER")
     f:SetMovable(true)
     f:EnableMouse(true)
@@ -269,9 +278,10 @@ function FeralHelper:CreateConfigFrame(noShow)
 
     -- Katzenrotation
     MakeSectionLabel(f, "-- Katzenrotation --", -576)
+    MakeHelpText(f, "Experimentell: Rip-Snapshot bleibt standardmaessig aus. Bei Aktivierung zeigt es Snapshot-Vergleich, Pull-Modus und Recast-Grund.", -592)
     local catCbs = {
-        MakeCheckbox(f, "Roar+Rip Warnung (experimentell)",   -592, "showRoarRipWarning"),
-        MakeCheckbox(f, "Rip-Snapshot/Pull-Modus (experimentell)", -614, "showRipSnapshot"),
+        MakeCheckbox(f, "Roar+Rip Warnung",   -628, "showRoarRipWarning"),
+        MakeCheckbox(f, "Rip-Snapshot/Pull-Modus", -650, "showRipSnapshot"),
     }
     for _, cb in ipairs(catCbs) do
         cb:SetScript("OnClick", function(self)
@@ -282,10 +292,10 @@ function FeralHelper:CreateConfigFrame(noShow)
     end
 
     -- Frames sperren
-    MakeSectionLabel(f, "-- Frames --", -648)
+    MakeSectionLabel(f, "-- Frames --", -682)
     local lockBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     lockBtn:SetSize(200, 26)
-    lockBtn:SetPoint("TOPLEFT", 30, -664)
+    lockBtn:SetPoint("TOPLEFT", 30, -698)
     lockBtn:SetScript("OnClick", function()
         FeralHelperDB.framesLocked = not FeralHelperDB.framesLocked
         lockBtn:SetText(FeralHelperDB.framesLocked and "Frames entsperren" or "Frames sperren")
@@ -296,9 +306,31 @@ function FeralHelper:CreateConfigFrame(noShow)
     end)
     f.lockBtn = lockBtn
 
+    local showFramesBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    showFramesBtn:SetSize(200, 26)
+    showFramesBtn:SetPoint("TOPLEFT", 30, -728)
+    showFramesBtn:SetText("Frames anzeigen")
+    showFramesBtn:SetScript("OnClick", function()
+        if FeralHelperDB then
+            FeralHelperDB.showHysteriaFrame = true
+            FeralHelperDB.showVZFrame = true
+            FeralHelperDB.showCDTracker = true
+            FeralHelperDB.showRoarRipWarning = true
+            FeralHelperDB.showRipSnapshot = true
+        end
+        if FeralHelper.ShowPositionFrames then
+            FeralHelper:ShowPositionFrames()
+        elseif FeralHelper.ApplyVisibility then
+            FeralHelper:ApplyVisibility()
+        end
+        LoadConfigFrameValues(f)
+        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99FeralHelper:|r Alle Positions-Frames eingeblendet.")
+    end)
+    f.showFramesBtn = showFramesBtn
+
     local defaultsBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    defaultsBtn:SetSize(200, 26)
-    defaultsBtn:SetPoint("TOPLEFT", 30, -694)
+    defaultsBtn:SetSize(150, 26)
+    defaultsBtn:SetPoint("TOPLEFT", 240, -698)
     defaultsBtn:SetText("Standard laden")
     defaultsBtn:SetScript("OnClick", function()
         FeralHelper:ApplyDefaultSettings(true)
