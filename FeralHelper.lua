@@ -718,6 +718,8 @@ local function CreateRipSnapshotFrame()
         elapsed = 0
         self.t = (self.t or 0) + e
 
+        if FH.ripTestMode then return end  -- Test-Modus: OnUpdate nicht überschreiben
+
         if not IsInCatForm() then self:Hide(); return end
 
         local now = GetTime()
@@ -1786,20 +1788,34 @@ SlashCmdList["FERALHELPER"] = function(msg)
             roarRipFrame.borderRip:SetAlpha(0.8)
             roarRipFrame.borderRip:Show()
         end
+        FH.ripTestMode = not FH.ripTestMode
         if ripSnapshotFrame then
-            ripSnapshotFrame:ClearAllPoints()
-            ripSnapshotFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-            ripSnapshotFrame:Show()
-            ripSnapshotFrame.timerRip:SetText("12")
-            ripSnapshotFrame.stateLabel:SetText("TF-aktiv")
-            ripSnapshotFrame.stateLabel:SetTextColor(0.2, 1, 0.2)
-            ripSnapshotFrame.timerRip:SetTextColor(0.2, 1, 0.2)
-            ripSnapshotFrame.iconTF:SetAlpha(1.0)
-            ripSnapshotFrame.tfLabel:SetText("TF: 8s")
+            if FH.ripTestMode then
+                ripSnapshotFrame:ClearAllPoints()
+                ripSnapshotFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+                ripSnapshotFrame:Show()
+                ripSnapshotFrame.timerRip:SetText("12")
+                ripSnapshotFrame.timerRip:SetTextColor(0.2, 1, 0.2)
+                ripSnapshotFrame.stateLabel:SetText("TF-aktiv")
+                ripSnapshotFrame.stateLabel:SetTextColor(0.2, 1, 0.2)
+                ripSnapshotFrame.iconTF:SetAlpha(1.0)
+                ripSnapshotFrame.tfLabel:SetText("TF: 8s")
+                ripSnapshotFrame.snapStatsLabel:SetText(
+                    "S TF|cff00cc00+|rSR|cffff4444-|rH|cffff4444-|rT|cffff4444-|rM|cff00cc00+|r 4520")
+                ripSnapshotFrame.curStatsLabel:SetText(
+                    "C TF|cff00cc00+|rSR|cff00cc00+|rH|cffff4444-|rT|cffff4444-|rM|cff00cc00+|r 5200 |cff00cc00+680|r")
+                ripSnapshotFrame.snapLabel:SetText("\226\134\145 NEU RIP: 8s")
+                ripSnapshotFrame.snapLabel:SetTextColor(1, 0.85, 0)
+                ripSnapshotFrame.border:SetVertexColor(0, 1, 0.2)
+                ripSnapshotFrame.border:SetAlpha(0.6)
+                ripSnapshotFrame.border:Show()
+            else
+                ripSnapshotFrame:Hide()
+            end
         end
         DEFAULT_CHAT_FRAME:AddMessage(
-            "|cff33ff99FeralHelper:|r Test-Frames angezeigt. "
-            .. "Sichtbar? Dann ist Position das Problem -> |cffffff00/fh reset|r")
+            "|cff33ff99FeralHelper:|r Rip-Snapshot Test " .. (FH.ripTestMode and "|cff00ff00AN|r" or "|cffff4444AUS|r")
+            .. " — sichtbar? Position OK. Sonst |cffffff00/fh reset|r")
     elseif msg == "debug" then
         local m = DEFAULT_CHAT_FRAME
         local y = "|cffffff00"; local r = "|r"; local g = "|cff33ff99"
