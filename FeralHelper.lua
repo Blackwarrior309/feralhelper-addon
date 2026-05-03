@@ -43,11 +43,17 @@ local SPELL_SCHWERTGARN = GetSpellInfo(55776) or "Schwertwallgarn"
 -- Katzenrotation
 local SPELL_SAVAGEROAR   = GetSpellInfo(52610) or "Raubtierbrüllen"
 local SPELL_RIP          = GetSpellInfo(49800) or "Zerreißen"
+local SPELL_TRICKS       = GetSpellInfo(57933) or "Tricks of the Trade"
+local SPELL_MANGLE_CAT   = GetSpellInfo(33876) or "Mangle"
+local SPELL_MANGLE_BEAR  = GetSpellInfo(33878) or SPELL_MANGLE_CAT
+local SPELL_TRAUMA       = GetSpellInfo(46857) or "Trauma"
 local SPELLID_SAVAGEROAR = 52610
 local SPELLID_RIP        = 49800
 local ROARRIP_WINDOW     = 8   -- beide müssen innerhalb N Sekunden ablaufen
 local ROARRIP_DELTA      = 3   -- gleichzeitig = Differenz < N Sekunden
 local RIP_RECAST_THRESH  = 5   -- "jetzt casten" wenn TF aktiv + Rip <= N Sekunden
+local PULL_MODE_WINDOW   = 18  -- Pull-Anzeige maximal N Sekunden nach Kampfbeginn
+local PULL_PROC_WAIT     = 8   -- so lange auf fruehe Procs warten, danach Rip empfehlen
 
 function FH:GetWhisperText(dbKey)
     local text = FeralHelperDB and FeralHelperDB[dbKey]
@@ -179,6 +185,7 @@ local survInstExpiry = nil
 
 -- Rip-Snapshot: gespeicherte Buff-Konstellation zum Cast-Zeitpunkt
 local ripSnapshot = nil
+local cdIcons = {}
 
 -- Icon-Pfade fuer Ingi-Tinker (per SpellID - egal was auf Slot liegt)
 local SPELLID_HYPERSPEED = 54758
@@ -223,6 +230,126 @@ local function GetAuraInfoById(unit, spellId, filter)
         end
     end
     return nil
+end
+
+local function GetAuraInfoAny(unit, names, filter)
+    for _, name in ipairs(names) do
+        local icon, count, duration, expirationTime = GetAuraInfo(unit, name, filter)
+        if icon then
+            return icon, count, duration, expirationTime
+        end
+    end
+    return nil
+end
+
+local BLEED_DAMAGE_DEBUFFS = {
+    SPELL_MANGLE_CAT,
+    SPELL_MANGLE_BEAR,
+    SPELL_TRAUMA,
+    "Mangle",
+    "Trauma",
+}
+
+local function TargetHasBleedDamageDebuff()
+    if not UnitExists("target") then return false end
+    return GetAuraInfoAny("target", BLEED_DAMAGE_DEBUFFS, "HARMFUL") ~= nil
+end
+
+local function GetPlayerAttackPowerTotal()
+    local base, pos, neg = UnitAttackPower("player")
+    return (base or 0) + (pos or 0) + (neg or 0)
+end
+
+local function GetInventorySlotCooldownRemaining(slot)
+    local start, dur = GetInventoryItemCooldown("player", slot)
+    if start and dur and dur > 1.5 then
+        return math.max(0, start + dur - GetTime())
+    end
+    return 0
+end
+
+local function GetSyntheticSlotCooldownRemaining(slot)
+    local key
+    if slot == SLOT_TRINKET1 then
+        key = "trinket1"
+    elseif slot == SLOT_TRINKET2 then
+        key = "trinket2"
+    end
+    local icon = key and cdIcons and cdIcons[key]
+    if icon and icon.synthCDEnd and icon.synthCDEnd > GetTime() then
+        return icon.synthCDEnd - GetTime()
+    end
+    return 0
+end
+
+local function GetTrackedSlotProc(slot)
+    local itemId = GetInventoryItemID("player", slot)
+    if not itemId then
+        return { equipped=false, known=false, active=false, ready=false, rem=0, cd=0 }
+    end
+
+    local procData = TRINKET_PROCS[itemId]
+    local active, rem = false, 0
+    if procData then
+        for _, buffName in ipairs(procData.names) do
+            local _, _, _, exp = GetAuraInfo("player", buffName, "HELPFUL")
+            if exp then
+                active = true
+                rem = math.max(0, exp - GetTime())
+                break
+            end
+        end
+        if not active then
+            local rawData = _TRINKET_PROC_IDS[itemId]
+            if rawData then
+                for _, sid in ipairs(rawData.spells) do
+                    local _, _, _, exp = GetAuraInfoById("player", sid, "HELPFUL")
+                    if exp then
+                        active = true
+                        rem = math.max(0, exp - GetTime())
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    local cd = math.max(GetInventorySlotCooldownRemaining(slot), GetSyntheticSlotCooldownRemaining(slot))
+    return {
+        equipped = true,
+        known    = procData ~= nil,
+        active   = active,
+        ready    = cd <= 0,
+        rem      = rem,
+        cd       = cd,
+    }
+end
+
+local function PullStartReady()
+    local t1 = GetTrackedSlotProc(SLOT_TRINKET1)
+    local t2 = GetTrackedSlotProc(SLOT_TRINKET2)
+    return t1.ready and t2.ready
+end
+
+local function CaptureRipSnapshot()
+    local _, _, _, tfExp   = GetAuraInfoById("player", 5217, "HELPFUL")
+    local _, _, _, roarExp = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
+    local _, _, _, hystExp = GetAuraInfoById("player", 49016, "HELPFUL")
+    local _, _, _, totExp  = GetAuraInfo("player", SPELL_TRICKS, "HELPFUL")
+    local trinket1         = GetTrackedSlotProc(SLOT_TRINKET1)
+    local trinket2         = GetTrackedSlotProc(SLOT_TRINKET2)
+
+    return {
+        tfActive       = tfExp   ~= nil,
+        roarActive     = roarExp ~= nil,
+        hysteriaActive = hystExp ~= nil,
+        totActive      = totExp  ~= nil,
+        mangleActive   = TargetHasBleedDamageDebuff(),
+        trinket1Active = trinket1.active,
+        trinket2Active = trinket2.active,
+        ap             = GetPlayerAttackPowerTotal(),
+        capturedAt     = GetTime(),
+    }
 end
 
 -- Verschiebbarer Frame, speichert Position bei Drop
@@ -720,37 +847,116 @@ local function CreateRipSnapshotFrame()
 
         if FH.ripTestMode then return end  -- Test-Modus: OnUpdate nicht überschreiben
 
-        if not IsInCatForm() then self:Hide(); return end
-
         local now = GetTime()
         local ripExp = GetOwnRipOnTarget()
         if not ripExp then
             ripSnapshot    = nil
             self.prevRipExp = nil
+            if FeralHelperDB.showRipSnapshot ~= false
+               and self.combatPreviewActive
+               and InCombatLockdown() then
+                local _, _, _, tfExp   = GetAuraInfoById("player", 5217, "HELPFUL")
+                local _, _, _, roarExp = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
+                local _, _, _, hystExp = GetAuraInfoById("player", 49016, "HELPFUL")
+                local _, _, _, totExp  = GetAuraInfo("player", SPELL_TRICKS, "HELPFUL")
+                local curAP            = GetPlayerAttackPowerTotal()
+                local tfActive         = tfExp   ~= nil
+                local roarActive       = roarExp ~= nil
+                local hysteriaActive   = hystExp ~= nil
+                local totActive        = totExp  ~= nil
+                local curMangle        = TargetHasBleedDamageDebuff()
+                local tfRem            = tfActive and math.max(0, tfExp - now) or 0
+                local t1               = GetTrackedSlotProc(SLOT_TRINKET1)
+                local t2               = GetTrackedSlotProc(SLOT_TRINKET2)
+                local pullElapsed      = self.pullStartTime and (now - self.pullStartTime) or 0
+                local pullMode         = self.pullModeActive
+                                      and self.pullStartTime
+                                      and pullElapsed <= PULL_MODE_WINDOW
+                local pullProcActive   = t1.active or t2.active
+                local ripRecommended   = pullMode
+                                      and (pullProcActive
+                                           or tfActive
+                                           or hysteriaActive
+                                           or totActive
+                                           or pullElapsed >= PULL_PROC_WAIT)
+                local bestUntil = math.huge
+                if t1.active and t1.rem and t1.rem > 0 then bestUntil = math.min(bestUntil, t1.rem) end
+                if t2.active and t2.rem and t2.rem > 0 then bestUntil = math.min(bestUntil, t2.rem) end
+                if tfActive and tfExp then bestUntil = math.min(bestUntil, tfExp - now) end
+                if hysteriaActive and hystExp then bestUntil = math.min(bestUntil, hystExp - now) end
+                if totActive and totExp then bestUntil = math.min(bestUntil, totExp - now) end
+                if roarActive and roarExp then bestUntil = math.min(bestUntil, roarExp - now) end
+                if bestUntil == math.huge then bestUntil = nil end
+                local function boolStr(b)
+                    return b and "|cff00cc00+|r" or "|cffff4444-|r"
+                end
+                local function slotStr(label, info)
+                    if not info.equipped then
+                        return label .. "|cff888888leer|r"
+                    elseif info.active then
+                        return label .. "|cff00cc00P" .. math.floor(info.rem) .. "|r"
+                    elseif info.cd and info.cd > 0 then
+                        return label .. "|cffff4444CD" .. math.floor(info.cd) .. "|r"
+                    elseif info.known then
+                        return label .. "|cffffff00ready|r"
+                    else
+                        return label .. "|cff888888?|r"
+                    end
+                end
+
+                self:Show()
+                if ripRecommended and bestUntil then
+                    self.timerRip:SetText(math.max(0, math.floor(bestUntil)))
+                else
+                    self.timerRip:SetText(ripRecommended and "!" or "-")
+                end
+                self.timerRip:SetTextColor(ripRecommended and 1 or 0.8, ripRecommended and 0.15 or 0.8, ripRecommended and 0.05 or 0.8)
+                self.stateLabel:SetText(ripRecommended and "RIP!" or (pullMode and "PULL" or "Kampf"))
+                self.stateLabel:SetTextColor(ripRecommended and 1 or 1, ripRecommended and 0.15 or 0.85, ripRecommended and 0.05 or 0)
+                self.iconTF:SetAlpha(tfActive and 1.0 or 0.2)
+                self.tfLabel:SetText(tfActive and ("TF: " .. math.floor(tfRem) .. "s") or "")
+                self.snapStatsLabel:SetText(
+                    slotStr("T1 ", t1) .. " " .. slotStr("T2 ", t2))
+                self.curStatsLabel:SetText(
+                    "TF" .. boolStr(tfActive) ..
+                    " SR" .. boolStr(roarActive) ..
+                    " H" .. boolStr(hysteriaActive) ..
+                    " T" .. boolStr(totActive) ..
+                    " M" .. boolStr(curMangle) ..
+                    " " .. curAP)
+                if ripRecommended then
+                    if bestUntil then
+                        self.snapLabel:SetText("RIP snapshot: " .. math.max(0, math.floor(bestUntil)) .. "s")
+                    else
+                        self.snapLabel:SetText("RIP snapshot")
+                    end
+                    self.snapLabel:SetTextColor(1, 0.25, 0.05)
+                    self.border:SetVertexColor(1, 0.25, 0.05)
+                    self.border:SetAlpha(0.65 + 0.35 * math.sin(self.t * 7))
+                elseif pullMode then
+                    self.snapLabel:SetText("warte auf fruehe Procs")
+                    self.snapLabel:SetTextColor(1, 0.85, 0)
+                    self.border:SetVertexColor(1, 0.85, 0)
+                    self.border:SetAlpha(0.35 + 0.25 * math.sin(self.t * 3))
+                else
+                    self.snapLabel:SetText("warte auf Rip")
+                    self.snapLabel:SetTextColor(0.8, 0.8, 0.8)
+                    self.border:SetVertexColor(1, 0.85, 0)
+                    self.border:SetAlpha(0.35 + 0.25 * math.sin(self.t * 3))
+                end
+                self.border:Show()
+                return
+            end
             self:Hide(); return
         end
         if FeralHelperDB.showRipSnapshot == false then self:Hide(); return end
+        self.pullModeActive = nil
 
         -- Neuen Rip-Cast erkennen: expiry springt deutlich nach oben
         if not self.prevRipExp or ripExp > self.prevRipExp + 5 then
-            local _, _, _, tf2   = GetAuraInfoById("player", 5217, "HELPFUL")
-            local _, _, _, roar2 = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
-            local _, _, _, hyst2 = GetAuraInfoById("player", 49016, "HELPFUL")
-            local _, _, _, tot2  = GetAuraInfo("player", "Tricks of the Trade", "HELPFUL")
-            local b2, p2         = UnitAttackPower("player")
-            local mgl2           = false
-            if UnitExists("target") then
-                mgl2 = GetAuraInfo("target", "Mangle", "HARMFUL") ~= nil
-                    or GetAuraInfo("target", "Trauma", "HARMFUL") ~= nil
+            if not ripSnapshot or not ripSnapshot.capturedAt or now - ripSnapshot.capturedAt > 1 then
+                ripSnapshot = CaptureRipSnapshot()
             end
-            ripSnapshot = {
-                tfActive       = tf2   ~= nil,
-                roarActive     = roar2 ~= nil,
-                hysteriaActive = hyst2 ~= nil,
-                totActive      = tot2  ~= nil,
-                mangleActive   = mgl2,
-                ap             = (b2 or 0) + (p2 or 0),
-            }
         end
         self.prevRipExp = ripExp
 
@@ -763,18 +969,15 @@ local function CreateRipSnapshotFrame()
         local _, _, _, tfExp   = GetAuraInfoById("player", 5217, "HELPFUL")
         local _, _, _, roarExp = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
         local _, _, _, hystExp = GetAuraInfoById("player", 49016, "HELPFUL")
-        local _, _, _, totExp  = GetAuraInfo("player", "Tricks of the Trade", "HELPFUL")
-        local base, pos        = UnitAttackPower("player")
-        local curAP            = (base or 0) + (pos or 0)
+        local _, _, _, totExp  = GetAuraInfo("player", SPELL_TRICKS, "HELPFUL")
+        local curAP            = GetPlayerAttackPowerTotal()
         local tfActive         = tfExp   ~= nil
         local roarActive       = roarExp ~= nil
         local hysteriaActive   = hystExp ~= nil
         local totActive        = totExp  ~= nil
-        local curMangle        = false
-        if UnitExists("target") then
-            curMangle = GetAuraInfo("target", "Mangle", "HARMFUL") ~= nil
-                     or GetAuraInfo("target", "Trauma", "HARMFUL") ~= nil
-        end
+        local curMangle        = TargetHasBleedDamageDebuff()
+        local curTrinket1      = GetTrackedSlotProc(SLOT_TRINKET1)
+        local curTrinket2      = GetTrackedSlotProc(SLOT_TRINKET2)
         local tfRem = tfActive and math.max(0, tfExp - now) or 0
 
         self.iconTF:SetAlpha(tfActive and 1.0 or 0.2)
@@ -820,6 +1023,7 @@ local function CreateRipSnapshotFrame()
         -- Snapshot-Vergleich: Wäre Recast jetzt besser?
         local snapBetter   = false
         local advantageSec = nil
+        local snapshotWindowSec = nil
         self.snapLabel:SetText("")
 
         if ripSnapshot then
@@ -829,23 +1033,38 @@ local function CreateRipSnapshotFrame()
             local totBetter     = totActive     and not ripSnapshot.totActive
             local mangleBetter  = curMangle     and not ripSnapshot.mangleActive
             local apBetter      = curAP > ripSnapshot.ap + 300
+            local trinketBetter = (curTrinket1.active and not ripSnapshot.trinket1Active)
+                               or (curTrinket2.active and not ripSnapshot.trinket2Active)
 
-            if tfBetter or roarBetter or hystBetter or totBetter or mangleBetter or apBetter then
+            if tfBetter or roarBetter or hystBetter or totBetter or mangleBetter or apBetter or trinketBetter then
                 snapBetter = true
-                local advEnd = math.huge
-                if tfBetter   and tfExp   then advEnd = math.min(advEnd, tfExp)   end
-                if roarBetter and roarExp then advEnd = math.min(advEnd, roarExp) end
-                if hystBetter and hystExp then advEnd = math.min(advEnd, hystExp) end
-                if totBetter  and totExp  then advEnd = math.min(advEnd, totExp)  end
-                if advEnd < math.huge then
-                    advantageSec = math.max(0, math.floor(advEnd - now))
+                local advRem = math.huge
+                if tfBetter   and tfExp   then advRem = math.min(advRem, tfExp - now)   end
+                if roarBetter and roarExp then advRem = math.min(advRem, roarExp - now) end
+                if hystBetter and hystExp then advRem = math.min(advRem, hystExp - now) end
+                if totBetter  and totExp  then advRem = math.min(advRem, totExp - now)  end
+                if apBetter or trinketBetter then
+                    if curTrinket1.active and curTrinket1.rem and curTrinket1.rem > 0 then
+                        advRem = math.min(advRem, curTrinket1.rem)
+                    end
+                    if curTrinket2.active and curTrinket2.rem and curTrinket2.rem > 0 then
+                        advRem = math.min(advRem, curTrinket2.rem)
+                    end
+                end
+                if advRem < math.huge then
+                    snapshotWindowSec = math.max(0, math.floor(advRem))
+                    advantageSec = snapshotWindowSec
                 end
             end
         end
 
         if snapBetter then
             if ripRem <= RIP_RECAST_THRESH then
-                self.snapLabel:SetText("\226\134\145 JETZT CASTEN!")
+                if snapshotWindowSec then
+                    self.snapLabel:SetText("\226\134\145 JETZT: " .. snapshotWindowSec .. "s")
+                else
+                    self.snapLabel:SetText("\226\134\145 JETZT CASTEN!")
+                end
                 self.snapLabel:SetTextColor(1, 0.3, 0)
             elseif advantageSec then
                 self.snapLabel:SetText("\226\134\145 NEU RIP: " .. advantageSec .. "s")
@@ -859,6 +1078,9 @@ local function CreateRipSnapshotFrame()
         if snapBetter and ripRem <= RIP_RECAST_THRESH then
             self.stateLabel:SetText("JETZT!")
             self.stateLabel:SetTextColor(1, 0.1, 0.1)
+            if snapshotWindowSec then
+                self.timerRip:SetText(snapshotWindowSec)
+            end
             self.timerRip:SetTextColor(1, 0.1, 0.1)
             self.border:SetVertexColor(1, 0.3, 0)
             self.border:SetAlpha(0.6 + 0.4 * math.sin(self.t * 6))
@@ -901,7 +1123,6 @@ end
 -- ============================================================
 
 local cdTracker
-local cdIcons = {}
 
 local function CreateCDIcon(parent, texture, label)
     local f = CreateFrame("Frame", nil, parent)
@@ -1608,6 +1829,7 @@ local main = CreateFrame("Frame")
 main:RegisterEvent("ADDON_LOADED")
 main:RegisterEvent("PLAYER_LOGIN")
 main:RegisterEvent("PLAYER_REGEN_DISABLED")
+main:RegisterEvent("PLAYER_REGEN_ENABLED")
 main:RegisterEvent("UNIT_AURA")
 main:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 
@@ -1674,6 +1896,13 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         end
 
     elseif event == "PLAYER_REGEN_DISABLED" then
+        if ripSnapshotFrame and FeralHelperDB.showRipSnapshot ~= false then
+            ripSnapshotFrame.combatPreviewActive = true
+            ripSnapshotFrame.pullStartTime = GetTime()
+            ripSnapshotFrame.pullModeActive = PullStartReady()
+            ripSnapshotFrame:Show()
+        end
+
         -- 3s nach Kampfbeginn Whisper senden
         ScheduleAfter(3, function()
             if not InCombatLockdown() then return end
@@ -1692,6 +1921,13 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
             DEFAULT_CHAT_FRAME:AddMessage(
                 "|cff33ff99FeralHelper:|r Whisper an " .. target .. " gesendet.")
         end)
+
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        if ripSnapshotFrame then
+            ripSnapshotFrame.combatPreviewActive = nil
+            ripSnapshotFrame.pullStartTime = nil
+            ripSnapshotFrame.pullModeActive = nil
+        end
 
     elseif event == "UNIT_AURA" and arg1 == "player" then
         if hopButton then UpdateHoPButton() end
@@ -1715,10 +1951,9 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         FH.hopWasActive = hopActive and true or false
 
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
-        -- WICHTIG: arg1 = timestamp, "..." beginnt bei subevent
-        -- (nicht nochmal timestamp aus "..." entpacken - das war der Bug)
-        local subevent, srcGUID, srcName, _,
-              destGUID, destName, _, spellId, spellName = ...
+        -- 3.3.5a: arg1 ist timestamp, danach kommt subevent, hideCaster, ...
+        local subevent, _, srcGUID, srcName, _,
+              _, destGUID, destName, _, _, spellId, spellName = ...
 
         if subevent == "SPELL_AURA_APPLIED"
            and destGUID == UnitGUID("player")
@@ -1729,24 +1964,7 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         if subevent == "SPELL_CAST_SUCCESS"
            and srcGUID == UnitGUID("player")
            and spellId == SPELLID_RIP then
-            local _, _, _, tfExp   = GetAuraInfoById("player", 5217, "HELPFUL")
-            local _, _, _, roarExp = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
-            local _, _, _, hystExp = GetAuraInfoById("player", 49016, "HELPFUL")
-            local _, _, _, totExp  = GetAuraInfo("player", "Tricks of the Trade", "HELPFUL")
-            local base, pos        = UnitAttackPower("player")
-            local mangleSnap = false
-            if UnitExists("target") then
-                mangleSnap = GetAuraInfo("target", "Mangle", "HARMFUL") ~= nil
-                          or GetAuraInfo("target", "Trauma", "HARMFUL") ~= nil
-            end
-            ripSnapshot = {
-                tfActive       = tfExp   ~= nil,
-                roarActive     = roarExp ~= nil,
-                hysteriaActive = hystExp ~= nil,
-                totActive      = totExp  ~= nil,
-                mangleActive   = mangleSnap,
-                ap             = (base or 0) + (pos or 0),
-            }
+            ripSnapshot = CaptureRipSnapshot()
         end
     end
 end)
