@@ -1984,6 +1984,11 @@ SlashCmdList["FERALHELPER"] = function(msg)
         FeralHelperDB.framePositions = {}
         DEFAULT_CHAT_FRAME:AddMessage(
             "|cff33ff99FeralHelper:|r Positionen zurueckgesetzt. /reload")
+    elseif msg == "defaults" or msg == "standard" then
+        if FH.ApplyDefaultSettings then
+            FH:ApplyDefaultSettings(true)
+            DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99FeralHelper:|r Standard-Einstellungen geladen. Positionen bleiben erhalten.")
+        end
     elseif msg == "icons" then
         FH.iconTestMode = not FH.iconTestMode
         if cdTracker then cdTracker:Show() end

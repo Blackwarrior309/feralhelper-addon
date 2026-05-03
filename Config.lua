@@ -9,15 +9,15 @@ FeralHelper.defaults = {
     whisperText              = "Bitte gib Boesartigkeit!",
     innervateWhisper         = "Ich wirke Anregen auf dich!",
     -- Chat-Toggles
-    hysteriaWhisperOnCombat  = true,
-    hysteriaWhisperOnCdExpire = true,
+    hysteriaWhisperOnCombat  = false,
+    hysteriaWhisperOnCdExpire = false,
     hysteriaWhisperOnClick   = true,
     innervateWhisperEnabled  = true,
     cdToSay                  = false,
-    outOfRangeToSay          = true,
-    survInstActiveSay        = true,
-    survInstCountdownSay     = true,
-    hopRemovedSay            = true,
+    outOfRangeToSay          = false,
+    survInstActiveSay        = false,
+    survInstCountdownSay     = false,
+    hopRemovedSay            = false,
     -- Sonstiges
     framePositions           = {},
     firstRun                 = true,
@@ -26,8 +26,8 @@ FeralHelper.defaults = {
     showHysteriaFrame        = true,
     showVZFrame              = true,
     showCDTracker            = true,
-    showRoarRipWarning       = true,
-    showRipSnapshot          = true,
+    showRoarRipWarning       = false,
+    showRipSnapshot          = false,
     minimapAngle             = 220,
 }
 
@@ -62,6 +62,30 @@ local function LoadConfigFrameValues(frame)
     end
     if frame.lockBtn then
         frame.lockBtn:SetText(FeralHelperDB.framesLocked and "Frames entsperren" or "Frames sperren")
+    end
+end
+
+function FeralHelper:ApplyDefaultSettings(keepPositions)
+    FeralHelperDB = FeralHelperDB or {}
+    local savedPositions = FeralHelperDB.framePositions
+    for k, v in pairs(self.defaults or {}) do
+        if type(v) == "table" then
+            FeralHelperDB[k] = {}
+        else
+            FeralHelperDB[k] = v
+        end
+    end
+    if keepPositions and savedPositions then
+        FeralHelperDB.framePositions = savedPositions
+    end
+    if self.configFrame then
+        LoadConfigFrameValues(self.configFrame)
+    end
+    if self.ApplyVisibility then
+        self:ApplyVisibility()
+    end
+    if self.SetLocked then
+        self:SetLocked(FeralHelperDB.framesLocked)
     end
 end
 
@@ -246,8 +270,8 @@ function FeralHelper:CreateConfigFrame(noShow)
     -- Katzenrotation
     MakeSectionLabel(f, "-- Katzenrotation --", -576)
     local catCbs = {
-        MakeCheckbox(f, "Roar+Rip Gleichzeitig-Warnung",      -592, "showRoarRipWarning"),
-        MakeCheckbox(f, "Rip-Snapshot Anzeige (TF-Timing)",   -614, "showRipSnapshot"),
+        MakeCheckbox(f, "Roar+Rip Warnung (experimentell)",   -592, "showRoarRipWarning"),
+        MakeCheckbox(f, "Rip-Snapshot/Pull-Modus (experimentell)", -614, "showRipSnapshot"),
     }
     for _, cb in ipairs(catCbs) do
         cb:SetScript("OnClick", function(self)
@@ -271,6 +295,16 @@ function FeralHelper:CreateConfigFrame(noShow)
             .. (FeralHelperDB.framesLocked and "|cffff3333gesperrt|r" or "|cff33ff99entsperrt|r"))
     end)
     f.lockBtn = lockBtn
+
+    local defaultsBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    defaultsBtn:SetSize(200, 26)
+    defaultsBtn:SetPoint("TOPLEFT", 30, -694)
+    defaultsBtn:SetText("Standard laden")
+    defaultsBtn:SetScript("OnClick", function()
+        FeralHelper:ApplyDefaultSettings(true)
+        DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99FeralHelper:|r Standard-Einstellungen geladen. Positionen bleiben erhalten.")
+    end)
+    f.defaultsBtn = defaultsBtn
 
     -- ---- Test-Whisper ----
     local testBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")

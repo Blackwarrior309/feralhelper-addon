@@ -58,12 +58,14 @@ Wenn ein Trinket im Snapshot-Fenster als `?` angezeigt wird, kennt das Addon den
 | Hysteria-Frame | Buff-Dauer + 180s CD + Auto-Whisper bei Kampfbeginn |
 | HoP-Button | Erscheint bei Hand des Schutzes; Klick entfernt Buff |
 | Freizaubern | Erscheint bei Omen-of-Clarity-Proc |
-| Roar+Rip Warnung | Warnt, wenn Savage Roar und Rip gleichzeitig ablaufen |
-| Rip Snapshot | Rip-Restdauer, Snapshot-Vergleich, Pull-Modus und Recast-Empfehlung |
+| Roar+Rip Warnung | Experimentell; warnt, wenn Savage Roar und Rip gleichzeitig ablaufen |
+| Rip Snapshot | Experimentell; Rip-Restdauer, Snapshot-Vergleich, Pull-Modus und Recast-Empfehlung |
 
 ---
 
-## Rip Snapshot
+## Rip Snapshot (experimentell)
+
+Standardmaessig deaktiviert. Aktivierbar ueber `/fh` unter Katzenrotation.
 
 Speichert beim Rip-Cast die aktuellen Snapshot-Faktoren und vergleicht sie live mit den aktuellen Werten.
 
@@ -94,7 +96,9 @@ Der Countdown beruecksichtigt Tigerwut, Savage Roar, Hysteria, Tricks und erkann
 
 ---
 
-## Pull-Modus
+## Pull-Modus (experimentell)
+
+Standardmaessig deaktiviert, weil er Teil der Rip-Snapshot-Anzeige ist.
 
 Beim Kampfbeginn wird das Rip-Snapshot-Fenster sichtbar, auch wenn noch kein Rip aktiv ist.
 
@@ -123,6 +127,7 @@ Die grosse Zahl im Rip-Icon zeigt dann ebenfalls die Restzeit des hoechsten Snap
 |--------|----------|
 | `/fh` | Einstellungen oeffnen |
 | `/fh reset` | Alle Frame-Positionen zuruecksetzen |
+| `/fh defaults` | Standard-Einstellungen laden, Positionen behalten |
 | `/fh icons` | Icon-Test: alle Icons sichtbar |
 | `/fh test` | Roar+Rip und Rip-Snapshot Test-Ansicht |
 | `/fh debug` | Debug-Info: Formstatus, Buff-Zeiten |
@@ -143,6 +148,17 @@ Die grosse Zahl im Rip-Icon zeigt dann ebenfalls die Restzeit des hoechsten Snap
 - Minimap-Icon Rechtsklick: Frames sperren/entsperren
 - Minimap-Icon ziehen: Position anpassen
 - Alle Frames sind per Drag verschiebbar, solange sie nicht gesperrt sind.
+- Button `Standard laden` oder `/fh defaults`: setzt raid-sichere Standardwerte und behaelt Frame-Positionen.
+
+### Standardwerte
+
+- Anzeige aktiv: Hysteria-Frame, Clearcast-Frame, CD-Leiste
+- Experimentell und standardmaessig aus: Roar+Rip-Warnung, Rip-Snapshot/Pull-Modus
+- Automatische Kampf-/CD-Whisper fuer Boesartigkeit: aus
+- Whisper per Klick auf das Hysteria-Frame: an
+- Anregen-Whisper beim Cast: an
+- Automatische `/sagen`-Meldungen: aus
+- Frames: entsperrt
 
 ---
 
