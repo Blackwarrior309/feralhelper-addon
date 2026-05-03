@@ -16,13 +16,13 @@ WoW 3.3.5a Addon fuer Feral Druiden (Katze und Baer). Trackt Cooldowns, Procs, d
 | Ueberlebensinstinkte | CD-Anzeige | Selbst-Cast |
 | Anregen | CD-Anzeige | wirkt auf Ziel + Whisper |
 | Wiedergeburt | CD-Anzeige | wirkt auf totes Ziel |
-| Trinket 1 und 2 | Proc gruen / ICD gedimmt | nein |
+| Trinket 1 und 2 | Proc-Dauer gruen / ICD gedimmt | nein |
 | Hyperspeed (Handschuhe) | Proc-Erkennung | aktiviert Item |
 | Nitro Boots (Schuhe) | Proc-Erkennung | aktiviert Item |
 | Waffe VZ | Aktiver Waffenproc mit dynamischem Icon | nein |
 | Mantel VZ | Aktiver Schneider-Mantel-Proc mit dynamischem Icon | nein |
 | Ring 1 und 2 | Ashen-Band-Procs | nein |
-| Panik-Knopf | Baer + Baumrinde + Wutanfall + Ueberlebensinstinkte | ja |
+| Panik-Knopf | Baer + Baumrinde + optional Wutanfall + Ueberlebensinstinkte | ja |
 
 ### Waffen-VZ Proc-Erkennung
 
@@ -51,12 +51,18 @@ Unterstuetzt viele WotLK-Trinkets mit ICDs, darunter:
 
 Wenn ein Trinket im Snapshot-Fenster als `?` angezeigt wird, kennt das Addon den Proc noch nicht. Dann muessen ItemID und Buff-SpellID ergaenzt werden.
 
+Der synthetische ICD startet beim Proc-Start und laeuft im Hintergrund weiter. Solange der Proc aktiv ist, zeigt das Icon die Proc-Restdauer. Sobald der Proc endet, schaltet die Anzeige auf den bereits heruntergezaehlten ICD um.
+
+### Panik-Knopf
+
+Der Panik-Knopf wirkt Baerengestalt, entfernt Hysteria, wirkt Baumrinde und danach Ueberlebensinstinkte. Wutanfall wird nur in das Macro aufgenommen, wenn mindestens 4 Teile des Feral-T10-Sets `Lasherweave Battlegear` getragen werden. Ohne diesen Setbonus wird Wutanfall ausgelassen, damit der Armor-Nachteil nicht versehentlich im Panik-Macro landet.
+
 ### Weitere Frames
 
 | Frame | Funktion |
 |-------|----------|
 | Hysteria-Frame | Buff-Dauer + 180s CD + Auto-Whisper bei Kampfbeginn |
-| HoP-Button | Erscheint bei Hand des Schutzes; Klick entfernt Buff |
+| HoP-Button | Erscheint auch im Kampf bei Hand des Schutzes; Klick entfernt Buff |
 | Freizaubern | Erscheint bei Omen-of-Clarity-Proc |
 | Roar+Rip Warnung | Experimentell; warnt, wenn Savage Roar und Rip gleichzeitig ablaufen |
 | Rip Snapshot | Experimentell; Rip-Restdauer, Snapshot-Vergleich, Pull-Modus und Recast-Empfehlung |

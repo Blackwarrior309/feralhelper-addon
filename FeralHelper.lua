@@ -95,7 +95,7 @@ local function GetOwnRipOnTarget()
     return nil
 end
 
--- icd = Internal Cooldown in Sekunden (fuer synthetischen CD nach Proc-Ende)
+-- icd = Internal Cooldown in Sekunden (startet beim Proc)
 local _TRINKET_PROC_IDS = {
     [50351] = { icd=45, spells={ 71887 } }, [50352] = { icd=45, spells={ 71887 } },  -- Death's Verdict (N)
     [50353] = { icd=45, spells={ 71888, 71601, 71644 } }, [50354] = { icd=45, spells={ 71888 } },  -- Death's Verdict (H) / DFO fallback
@@ -139,7 +139,7 @@ local _TRINKET_PROC_IDS = {
     [50403] = { icd=60, spells={ 72414 } }, -- Endless Resolve Tank 10N
     [50404] = { icd=60, spells={ 72414 } }, -- Endless Resolve Tank 10H
 
-    -- Ergaenzt aus TrinketCDsDB (icd=0 = kein Syn-CD nach Proc-Ende)
+    -- Ergaenzt aus TrinketCDsDB (icd=0 = kein synthetischer CD)
     [47059] = { icd=0, spells={ 67750 } }, -- Solace of the Defeated (H)
     [47041] = { icd=0, spells={ 67696 } }, -- Solace of the Defeated (N)
     [47432] = { icd=0, spells={ 67750 } }, -- Solace of the Fallen (H)
@@ -194,14 +194,42 @@ local SPELLID_NITRO      = 54861
 -- Inventar-Slots
 local SLOT_HANDS    = 10
 local SLOT_FEET     = 8
+local SLOT_HEAD     = 1
+local SLOT_SHOULDER = 3
+local SLOT_CHEST    = 5
+local SLOT_LEGS     = 7
 local SLOT_TRINKET1 = 13
 local SLOT_TRINKET2 = 14
 local SLOT_BACK     = 15
 
 local HYSTERIA_CD = 180
 
+local FERAL_T10_ITEM_IDS = {
+    -- Lasherweave Battlegear 251
+    [50824] = true, [50825] = true, [50826] = true, [50827] = true, [50828] = true,
+    -- Sanctified Lasherweave Battlegear 264
+    [51140] = true, [51141] = true, [51142] = true, [51143] = true, [51144] = true,
+    -- Sanctified Lasherweave Battlegear 277
+    [51295] = true, [51296] = true, [51297] = true, [51298] = true, [51299] = true,
+    -- Manche 3.3.5a-Datenbanken/Server listen die 277er unter diesen IDs.
+    [51697] = true, [51698] = true, [51699] = true, [51700] = true, [51701] = true,
+}
+
+local FERAL_T10_SLOTS = { SLOT_HEAD, SLOT_SHOULDER, SLOT_CHEST, SLOT_HANDS, SLOT_LEGS }
+
 local function CanMove()
-    return not (FeralHelperDB and FeralHelperDB.framesLocked)
+    return not InCombatLockdown() and not (FeralHelperDB and FeralHelperDB.framesLocked)
+end
+
+local function HasFeralT104p()
+    local pieces = 0
+    for _, slot in ipairs(FERAL_T10_SLOTS) do
+        local itemId = GetInventoryItemID("player", slot)
+        if itemId and FERAL_T10_ITEM_IDS[itemId] then
+            pieces = pieces + 1
+        end
+    end
+    return pieces >= 4
 end
 
 -- ============================================================
@@ -479,21 +507,25 @@ local function CreateHysteriaFrame()
         CooldownFrame_SetTimer(self.cd, 0, 0, 0)
     end)
 
-    -- Verschieben nur mit Shift+Drag (sonst wuerde normaler Klick = drag)
-    -- CreateMovableFrame hat schon RegisterForDrag gesetzt, Scripts ueberschreiben:
-    hysteriaFrame:SetScript("OnMouseDown", function(self, btn)
-        if btn == "LeftButton" and CanMove() then
+    -- OnDragStart feuert nur wenn Maus sich wirklich bewegt (nicht bei einfachem Klick).
+    -- CreateMovableFrame hat bereits RegisterForDrag gesetzt.
+    hysteriaFrame:SetScript("OnDragStart", function(self)
+        if CanMove() then
             self:StartMoving()
             self.isDragging = true
         end
     end)
+    hysteriaFrame:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local point, _, relPoint, x, y = self:GetPoint()
+        FeralHelperDB.framePositions[self:GetName()] = { point, relPoint, x, y }
+    end)
     hysteriaFrame:SetScript("OnMouseUp", function(self, btn)
         if self.isDragging then
-            self:StopMovingOrSizing()
             self.isDragging = false
-            local point, _, relPoint, x, y = self:GetPoint()
-            FeralHelperDB.framePositions[self:GetName()] = { point, relPoint, x, y }
-        elseif btn == "LeftButton" then
+            return
+        end
+        if btn == "LeftButton" then
             -- Buff gerade aktiv?
             local _, _, _, buffExp = GetAuraInfo("player", SPELL_HYSTERIA, "HELPFUL")
             if buffExp then
@@ -541,16 +573,24 @@ end
 -- 2) HAND DES SCHUTZES - Button + Entfernen
 -- ============================================================
 
-local hopButton
+local hopWrapper, hopButton
+local UpdateHoPButton
 local function CreateHoPButton()
-    hopButton = CreateFrame("Button", "FeralHelperHoPButton", UIParent,
-        "SecureActionButtonTemplate")
-    hopButton:SetSize(96, 96)
-    hopButton:SetMovable(true)
-    hopButton:RegisterForDrag("LeftButton")
-    hopButton:SetClampedToScreen(true)
-    hopButton:ClearAllPoints()
-    hopButton:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
+    -- Nicht-sicherer Container fuer Position/Optik.
+    -- Name "FeralHelperHoPButton" bleibt fuer RestoreFramePosition/Positionsspeicherung.
+    hopWrapper = CreateFrame("Frame", "FeralHelperHoPButton", UIParent)
+    hopWrapper:SetSize(96, 96)
+    hopWrapper:SetMovable(true)
+    hopWrapper:RegisterForDrag("LeftButton")
+    hopWrapper:SetClampedToScreen(true)
+    hopWrapper:ClearAllPoints()
+    hopWrapper:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
+
+    -- Sicherer Action-Button als Kind des Wrappers (erbt Sichtbarkeit vom Wrapper).
+    -- Ein SecureActionButton darf /cancelaura auch im Kampf ausfuehren,
+    -- auch wenn sein Eltern-Frame kein Secure-Frame ist.
+    hopButton = CreateFrame("Button", nil, hopWrapper, "SecureActionButtonTemplate")
+    hopButton:SetAllPoints(hopWrapper)
 
     local _, _, hopIcon = GetSpellInfo(1022)
     local tex = hopButton:CreateTexture(nil, "ARTWORK")
@@ -566,19 +606,19 @@ local function CreateHoPButton()
     border:SetPoint("BOTTOMRIGHT", 10, -10)
     hopButton.border = border
 
-    local label = hopButton:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    label:SetPoint("TOP", hopButton, "BOTTOM", 0, -4)
+    local label = hopWrapper:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    label:SetPoint("TOP", hopWrapper, "BOTTOM", 0, -4)
     label:SetTextColor(1, 0.2, 0.2)
     label:SetText("HoP entfernen!")
 
-    -- Shift+Drag zum Verschieben (normaler Klick = cancelaura)
-    hopButton:SetScript("OnDragStart", function(self)
+    -- Drag auf Wrapper (nicht-sicher, kein Combat-Lockdown-Problem)
+    hopWrapper:SetScript("OnDragStart", function(self)
         if CanMove() then self:StartMoving() end
     end)
-    hopButton:SetScript("OnDragStop", function(self)
+    hopWrapper:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         local point, _, relPoint, x, y = self:GetPoint()
-        FeralHelperDB.framePositions["FeralHelperHoPButton"] = { point, relPoint, x, y }
+        FeralHelperDB.framePositions[self:GetName()] = { point, relPoint, x, y }
     end)
 
     -- type=macro mit /cancelaura (type=cancelaura buggy in 3.3.5a)
@@ -591,16 +631,22 @@ local function CreateHoPButton()
         self.border:SetAlpha(0.5 + 0.5 * math.sin(self.t * 4))
     end)
 
-    hopButton:Hide()
-    RestoreFramePosition(hopButton)
+    RestoreFramePosition(hopWrapper)
+    UpdateHoPButton()
 end
 
-local function UpdateHoPButton()
+function UpdateHoPButton()
+    if not hopWrapper then return end
+    -- Der Button enthaelt einen SecureActionButton. Show/Hide ist im Kampf
+    -- blockiert, wenn Hand des Schutzes erst dann aktiv wird. Deshalb bleibt
+    -- der Klickbereich geladen und wir schalten nur die Sichtbarkeit per Alpha.
+    -- GetAuraInfo (namensbasiert) verwenden, da UnitAura Spell-ID (Pos.11) auf
+    -- diesem Server moeglicherweise nicht zuverlaessig zurueckgegeben wird.
     local _, _, _, expTime = GetAuraInfo("player", SPELL_HOP, "HELPFUL")
     if expTime then
-        hopButton:Show()
+        hopWrapper:SetAlpha(1)
     else
-        hopButton:Hide()
+        hopWrapper:SetAlpha(0)
     end
 end
 
@@ -947,7 +993,37 @@ local function CreateRipSnapshotFrame()
                 self.border:Show()
                 return
             end
-            self:Hide(); return
+            if FeralHelperDB.showRipSnapshot == false then self:Hide(); return end
+            -- Idle-Zustand: kein Rip auf Ziel, aktuelle Buffs anzeigen
+            self:Show()
+            local _, _, _, tfExp2   = GetAuraInfoById("player", 5217, "HELPFUL")
+            local _, _, _, roarExp2 = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
+            local _, _, _, hystExp2 = GetAuraInfoById("player", 49016, "HELPFUL")
+            local _, _, _, totExp2  = GetAuraInfo("player", SPELL_TRICKS, "HELPFUL")
+            local tfA   = tfExp2   ~= nil
+            local roarA = roarExp2 ~= nil
+            local hystA = hystExp2 ~= nil
+            local totA  = totExp2  ~= nil
+            local mA    = TargetHasBleedDamageDebuff()
+            local ap    = GetPlayerAttackPowerTotal()
+            local function bs(b) return b and "|cff00cc00+|r" or "|cffff4444-|r" end
+            self.timerRip:SetText("-")
+            self.timerRip:SetTextColor(0.5, 0.5, 0.5)
+            self.stateLabel:SetText("kein Rip")
+            self.stateLabel:SetTextColor(0.5, 0.5, 0.5)
+            self.iconTF:SetAlpha(tfA and 1.0 or 0.2)
+            self.tfLabel:SetText(tfA and ("TF: " .. math.floor(math.max(0, tfExp2 - now)) .. "s") or "")
+            self.snapStatsLabel:SetText("")
+            self.curStatsLabel:SetText(
+                "TF" .. bs(tfA) ..
+                " SR" .. bs(roarA) ..
+                " H"  .. bs(hystA) ..
+                " T"  .. bs(totA) ..
+                " M"  .. bs(mA) ..
+                " " .. ap)
+            self.snapLabel:SetText("")
+            self.border:Hide()
+            return
         end
         if FeralHelperDB.showRipSnapshot == false then self:Hide(); return end
         self.pullModeActive = nil
@@ -1123,6 +1199,28 @@ end
 -- ============================================================
 
 local cdTracker
+local panicButton
+local panicMacroNeedsUpdate
+
+local function BuildPanicMacro()
+    local macro = "/cast [noform:1] " .. SPELL_BEARFORM
+        .. "\n/cancelaura " .. SPELL_HYSTERIA
+        .. "\n/cast " .. SPELL_BARKSKIN
+    if HasFeralT104p() then
+        macro = macro .. "\n/cast [form:1] " .. SPELL_ENRAGE
+    end
+    return macro .. "\n/cast [form:1] " .. SPELL_SURVINST
+end
+
+local function UpdatePanicButtonMacro()
+    if not panicButton then return end
+    if InCombatLockdown() then
+        panicMacroNeedsUpdate = true
+        return
+    end
+    panicMacroNeedsUpdate = nil
+    panicButton:SetAttribute("macrotext", BuildPanicMacro())
+end
 
 local function CreateCDIcon(parent, texture, label)
     local f = CreateFrame("Frame", nil, parent)
@@ -1235,11 +1333,7 @@ local function CreateCDTracker()
           label="Ring 2", type="item-slot", slot=12, procOnly=true },
         { key="panic", tex=bearFormIcon or "Interface\\Icons\\Ability_Racial_BearForm",
           label="Panik", type="panic",
-          macrotext="/cast [noform:1] " .. SPELL_BEARFORM
-                 .. "\n/cancelaura " .. SPELL_HYSTERIA
-                 .. "\n/cast " .. SPELL_BARKSKIN
-                 .. "\n/cast [form:1] " .. SPELL_ENRAGE
-                 .. "\n/cast [form:1] " .. SPELL_SURVINST },
+          macrotext=BuildPanicMacro() },
     }
 
     local visualIndex = 0
@@ -1264,12 +1358,8 @@ local function CreateCDTracker()
             btn:SetAllPoints(icon)
             btn:RegisterForClicks("AnyDown", "AnyUp")
             btn:SetAttribute("type", "macro")
-            btn:SetAttribute("macrotext",
-                "/cast [noform:1] " .. SPELL_BEARFORM ..
-                "\n/cancelaura " .. SPELL_HYSTERIA ..
-                "\n/cast " .. SPELL_BARKSKIN ..
-                "\n/cast [form:1] " .. SPELL_ENRAGE ..
-                "\n/cast [form:1] " .. SPELL_SURVINST)
+            panicButton = btn
+            UpdatePanicButtonMacro()
         end
 
         -- Ingi-Tinker: Klick benutzt Item im jeweiligen Slot (/use slot)
@@ -1445,6 +1535,7 @@ local function CreateCDTracker()
 
                 -- Proc-Buff prüfen
                 local procActive = false
+                local procExp = nil
                 local itemId = GetInventoryItemID("player", ent.slot)
                 local procData = itemId and TRINKET_PROCS[itemId]
                 if ent.procOnly and not procData then
@@ -1455,7 +1546,7 @@ local function CreateCDTracker()
                     -- Name-basiert
                     for _, buffName in ipairs(procData.names) do
                         local _, _, _, exp = GetAuraInfo("player", buffName, "HELPFUL")
-                        if exp then procActive = true; break end
+                        if exp then procActive = true; procExp = exp; break end
                     end
                     -- ID-basiert als Fallback (falls GetSpellInfo Namen nicht aufgeloest hat)
                     if not procActive then
@@ -1463,29 +1554,33 @@ local function CreateCDTracker()
                         if rawData then
                             for _, sid in ipairs(rawData.spells) do
                                 local _, _, _, exp = GetAuraInfoById("player", sid, "HELPFUL")
-                                if exp then procActive = true; break end
+                                if exp then procActive = true; procExp = exp; break end
                             end
                         end
                     end
                 end
                 if ent.procSpell and not procActive then
                     local _, _, _, exp = GetAuraInfo("player", ent.procSpell, "HELPFUL")
-                    if exp then procActive = true end
+                    if exp then procActive = true; procExp = exp end
                 end
 
-                -- Proc-Übergang aktiv→inaktiv: synthetischen ICD starten
-                -- falls GetInventoryItemCooldown keinen CD liefert (passive ICDs)
+                -- Proc-Uebergang inaktiv -> aktiv: synthetischen ICD starten
+                -- Passive Trinket-ICDs laufen ab Proc-Start, nicht erst ab Buff-Ende.
                 if procActive then
-                    icon.procWasActive = true
-                else
-                    if icon.procWasActive then
-                        icon.procWasActive = false
+                    if not icon.procWasActive then
                         local s, d = GetInventoryItemCooldown("player", ent.slot)
                         if not (s and d and d > 1.5) then
                             local icd = (procData and procData.icd) or 45
-                            icon.synthCDEnd = GetTime() + icd
+                            if icd and icd > 0 then
+                                icon.synthCDEnd = GetTime() + icd
+                            else
+                                icon.synthCDEnd = nil
+                            end
                         end
                     end
+                    icon.procWasActive = true
+                else
+                    icon.procWasActive = false
                 end
 
                 local start, dur, enabled = GetInventoryItemCooldown("player", ent.slot)
@@ -1497,11 +1592,10 @@ local function CreateCDTracker()
                     icon.border:SetVertexColor(0, 1, 0.2)
                     icon.border:SetAlpha(0.6 + 0.4 * math.sin(cdTime * 6))
                     icon.border:Show()
-                    if realCD then
-                        CooldownFrame_SetTimer(icon.cd, start, dur, enabled)
-                        icon.timer:SetText(math.floor(start + dur - GetTime()))
+                    CooldownFrame_SetTimer(icon.cd, 0, 0, 0)
+                    if procExp then
+                        icon.timer:SetText(math.floor(math.max(0, procExp - GetTime())))
                     else
-                        CooldownFrame_SetTimer(icon.cd, 0, 0, 0)
                         icon.timer:SetText("")
                     end
                 elseif realCD then
@@ -1716,8 +1810,12 @@ function FH:ApplyVisibility()
     if roarRipFrame and FeralHelperDB.showRoarRipWarning == false then
         roarRipFrame:Hide()
     end
-    if ripSnapshotFrame and FeralHelperDB.showRipSnapshot == false then
-        ripSnapshotFrame:Hide()
+    if ripSnapshotFrame then
+        if FeralHelperDB.showRipSnapshot == false then
+            ripSnapshotFrame:Hide()
+        else
+            ripSnapshotFrame:Show()
+        end
     end
 end
 
@@ -1830,6 +1928,7 @@ main:RegisterEvent("ADDON_LOADED")
 main:RegisterEvent("PLAYER_LOGIN")
 main:RegisterEvent("PLAYER_REGEN_DISABLED")
 main:RegisterEvent("PLAYER_REGEN_ENABLED")
+main:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 main:RegisterEvent("UNIT_AURA")
 main:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 
@@ -1883,6 +1982,7 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         CreateRoarRipFrame()
         CreateRipSnapshotFrame()
         CreateMinimapButton()
+        UpdatePanicButtonMacro()
         FH:ApplyVisibility()
         if FeralHelperDB.firstRun then
             FeralHelperDB.firstRun = false
@@ -1928,9 +2028,15 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
             ripSnapshotFrame.pullStartTime = nil
             ripSnapshotFrame.pullModeActive = nil
         end
+        if panicMacroNeedsUpdate then
+            UpdatePanicButtonMacro()
+        end
+
+    elseif event == "PLAYER_EQUIPMENT_CHANGED" then
+        UpdatePanicButtonMacro()
 
     elseif event == "UNIT_AURA" and arg1 == "player" then
-        if hopButton then UpdateHoPButton() end
+        if hopWrapper then UpdateHoPButton() end
         if vzFrame then
             local _, _, _, vzExp = GetAuraInfo("player", SPELL_CLEARCAST, "HELPFUL")
             if vzExp and FeralHelperDB.showVZFrame ~= false then vzFrame:Show() else vzFrame:Hide() end
