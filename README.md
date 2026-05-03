@@ -58,7 +58,31 @@ Alle 10 Varianten automatisch erkannt (Slot 11 & 12), ICD 60s.
 | HoP-Button | Erscheint wenn Hand des Schutzes aktiv → Klick entfernt Buff |
 | Freizaubern | Erscheint bei Omen of Clarity Proc |
 | Roar+Rip Warnung | Warnt wenn Savage Roar + Rip gleichzeitig ablaufen |
-| Rip Snapshot | Zeigt Rip-Restdauer + TF-Status + "JETZT!" Hinweis |
+| Rip Snapshot | Rip-Restdauer + Snapshot-Vergleich + Recast-Empfehlung |
+
+### Rip Snapshot
+
+Speichert beim Rip-Cast die aktuellen Schadensmultiplikatoren und vergleicht sie live mit dem laufenden Rip:
+
+| Faktor | Einfluss |
+|--------|---------|
+| Tiger's Fury (TF) | +15% Schaden |
+| Savage Roar (SR) | +30% physischer Schaden |
+| Hysteria (H) | +20% physischer Schaden |
+| Tricks of the Trade (T) | +15% Schaden |
+| Mangle/Trauma-Debuff (M) | +30% Bleed-Schaden |
+| Attack Power (AP) | Schwelle: +300 AP |
+
+Das Frame zeigt zwei Statuszeilen:
+
+```
+S TF+SR-H-T-M+  4520      ← Snapshot beim Cast
+C TF+SR+H+T-M+  5100 +580 ← Aktuelle Werte
+```
+
+Sobald aktuelle Werte besser sind:
+- **`↑ NEU RIP: Xs`** (gold) — Rip noch > 5s, Recast empfohlen, Countdown zeigt wie lange der Vorteil besteht
+- **`↑ JETZT CASTEN!`** (orange) — Rip ≤ 5s, sofort neu casten
 
 ---
 
