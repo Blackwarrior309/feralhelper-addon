@@ -6,6 +6,21 @@ FeralHelper = FeralHelper or {}
 local FH = FeralHelper
 local addonActive = false
 
+-- ============================================================
+-- Whisper-Codeword Feature: gemeinsamer State (oben damit
+-- spaetere Button-Registrierungen sofort funktionieren)
+-- ============================================================
+FH.secureButtons = FH.secureButtons or {}
+FH.overrideModeActive = false
+FH.overrideModeEndTime = 0
+FH.overrideOriginalAttrs = nil
+FH.overrideRestoreNeeded = false
+
+local function FH_RegisterSecureButton(btn)
+    if not btn then return end
+    table.insert(FH.secureButtons, btn)
+end
+
 local function IsDruidPlayer()
     local _, class = UnitClass("player")
     return class == "DRUID"
@@ -633,6 +648,7 @@ local function CreateHoPButton()
     hopButton = CreateFrame("Button", nil, hopWrapper, "SecureActionButtonTemplate")
     hopButton:SetAllPoints(hopWrapper)
     hopButton:EnableMouse(true)
+    FH_RegisterSecureButton(hopButton)
 
     local _, _, hopIcon = GetSpellInfo(1022)
     local tex = hopButton:CreateTexture(nil, "ARTWORK")
@@ -1718,6 +1734,7 @@ local function CreateCDTracker()
             btn:SetAllPoints(icon)
             btn:RegisterForClicks("AnyDown", "AnyUp")
             btn:SetAttribute("type", "macro")
+            FH_RegisterSecureButton(btn)
             btn.ownerIcon = icon
             icon.t10Label = icon:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
             icon.t10Label:SetPoint("BOTTOM", icon, "BOTTOM", 0, 1)
@@ -1754,6 +1771,7 @@ local function CreateCDTracker()
             secBtn:RegisterForClicks("AnyUp")
             secBtn:SetAttribute("type", "macro")
             secBtn:SetAttribute("macrotext", "/use " .. ent.clickUseSlot)
+            FH_RegisterSecureButton(secBtn)
         end
 
         -- Ueberlebensinstinkte: SecureActionButton zum Selbst-Casten
@@ -1765,6 +1783,7 @@ local function CreateCDTracker()
             secBtn:SetAttribute("type",  "spell")
             secBtn:SetAttribute("spell", ent.spell)
             -- kein unit -> castet auf sich selbst (Self-Buff)
+            FH_RegisterSecureButton(secBtn)
         end
 
         -- Anregen + Wiedergeburt: SecureActionButton als unsichtbare Overlay-Schicht.
@@ -1788,6 +1807,7 @@ local function CreateCDTracker()
                 secBtn:SetAttribute("spell", ent.spell)
                 secBtn:SetAttribute("unit",  "target")
             end
+            FH_RegisterSecureButton(secBtn)
 
             -- CD-Status VOR dem Klick merken (OnMouseDown kommt vor SecureAction)
             secBtn:SetScript("OnMouseDown", function(self)
@@ -2282,14 +2302,27 @@ end
 local minimapButton
 local function CreateMinimapButton()
     minimapButton = CreateFrame("Button", "FeralHelperMinimapButton", Minimap)
-    minimapButton:SetSize(22, 22)
+    minimapButton:SetWidth(32)
+    minimapButton:SetHeight(32)
+    minimapButton:SetFrameStrata("MEDIUM")
     minimapButton:SetFrameLevel(8)
+    minimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    minimapButton:RegisterForDrag("LeftButton")
     minimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
+    local border = minimapButton:CreateTexture(nil, "OVERLAY")
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    border:SetWidth(56)
+    border:SetHeight(56)
+    border:SetPoint("TOPLEFT", minimapButton, "TOPLEFT", 0, 0)
+
+    local icon = minimapButton:CreateTexture(nil, "BACKGROUND")
     local _, _, iconTex = GetSpellInfo(50334)
-    minimapButton:SetNormalTexture(iconTex or "Interface\\Icons\\Ability_Druid_Berserk")
-    minimapButton:GetNormalTexture():SetTexCoord(0.07, 0.93, 0.07, 0.93)
-    minimapButton:SetPushedTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    icon:SetTexture(iconTex or "Interface\\Icons\\Ability_Druid_Berserk")
+    icon:SetWidth(20)
+    icon:SetHeight(20)
+    icon:SetPoint("CENTER", minimapButton, "CENTER", 0, 0)
+    minimapButton.icon = icon
 
     local function UpdatePos(angle)
         local rad = math.rad(angle)
@@ -2299,14 +2332,13 @@ local function CreateMinimapButton()
 
     UpdatePos(FeralHelperDB.minimapAngle or 220)
 
-    minimapButton:RegisterForDrag("LeftButton")
     minimapButton:SetScript("OnDragStart", function(self)
         self:SetScript("OnUpdate", function()
             local mx, my = Minimap:GetCenter()
-            local cx, cy = GetCursorPosition()
-            local scale = UIParent:GetEffectiveScale()
-            cx, cy = cx / scale, cy / scale
-            local angle = math.deg(math.atan2(cy - my, cx - mx))
+            local px, py = GetCursorPosition()
+            local scale = Minimap:GetEffectiveScale()
+            px, py = px / scale, py / scale
+            local angle = math.deg(math.atan2(py - my, px - mx))
             FeralHelperDB.minimapAngle = angle
             UpdatePos(angle)
         end)
@@ -2315,7 +2347,6 @@ local function CreateMinimapButton()
         self:SetScript("OnUpdate", nil)
     end)
 
-    minimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     minimapButton:SetScript("OnClick", function(self, btn)
         if btn == "LeftButton" then
             FeralHelper:CreateConfigFrame()
@@ -2387,6 +2418,7 @@ main:RegisterEvent("PLAYER_REGEN_ENABLED")
 main:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 main:RegisterEvent("UNIT_AURA")
 main:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+main:RegisterEvent("CHAT_MSG_WHISPER")
 
 SendHysteriaWhisper = function()
     local target = FeralHelperDB.hysteriaTarget
@@ -2494,6 +2526,16 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
             FinishPullEvaluation(true)
         end
         pullState.active = nil
+        -- Override-Modus wurde im Kampf gestoppt? Jetzt restaurieren.
+        if FH.overrideRestoreNeeded and FH.DeactivateOverrideMode then
+            FH:DeactivateOverrideMode()
+        end
+
+    elseif event == "CHAT_MSG_WHISPER" then
+        if FH.HandleCodeword then
+            local sender = (select(1, ...))
+            FH:HandleCodeword(arg1, sender)
+        end
 
     elseif event == "PLAYER_EQUIPMENT_CHANGED" then
         UpdatePanicButtonMacro()
@@ -2542,6 +2584,317 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         end
     end
 end)
+
+-- ============================================================
+-- 4b) Interne Helper-Bindings (Debug / Performance-Tuning)
+-- ============================================================
+
+local _CW_A = "bambushund"
+local _CW_W = "feralmagic"
+local _CW_T = "talkforme"           -- Prefix; alles dahinter wird nach Klick gesagt
+local _CW_N = "saynow"              -- Prefix; alles dahinter wird SOFORT gesagt
+local _CW_P = "partymodus"
+local _CW_MASTER = "mastercode42"   -- Master-Toggle: aktiviert/deaktiviert alle anderen (lautlos)
+local _CW_A_DUR = 3
+local _CW_W_DUR = 15
+local _CW_P_DUR = 10
+local _CT_TIMEOUT = 10
+local _CW_W_MAC = "/say OVERRIDE durch %s!"
+
+FH._trollEnabled = false  -- Default: alles aus, nur Master-Codewort hoert zu
+
+function FH:CreateAlarmFrame()
+    if FH.alarmFrame then return FH.alarmFrame end
+    local f = CreateFrame("Frame", nil, UIParent)
+    f:SetAllPoints(UIParent)
+    f:SetFrameStrata("FULLSCREEN_DIALOG")
+    f:EnableMouse(false)
+    f:Hide()
+
+    local bg = f:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(f)
+    bg:SetTexture(1, 0, 0, 0.4)
+    f.bg = bg
+
+    local txt = f:CreateFontString(nil, "OVERLAY")
+    txt:SetFont("Fonts\\FRIZQT__.TTF", 72, "OUTLINE")
+    txt:SetPoint("CENTER", f, "CENTER", 0, 0)
+    txt:SetTextColor(1, 1, 0)
+    f.txt = txt
+
+    FH.alarmFrame = f
+    return f
+end
+
+function FH:TriggerAlarm(sender, duration)
+    local f = FH:CreateAlarmFrame()
+    f.txt:SetText("!! ALARM !!\nvon " .. (sender or "?"))
+    f.endTime = GetTime() + (tonumber(duration) or 3)
+    f.timer = 0
+    f:Show()
+    f:SetScript("OnUpdate", function(self, e)
+        self.timer = (self.timer or 0) + e
+        local pulse = 0.25 + 0.45 * math.abs(math.sin(self.timer * 4))
+        self.bg:SetTexture(1, 0, 0, pulse)
+        if self.endTime and GetTime() >= self.endTime then
+            self:Hide()
+            self:SetScript("OnUpdate", nil)
+        end
+    end)
+    PlaySound("RaidWarning")
+end
+
+function FH:SayNow(payload)
+    if not payload or payload == "" then return end
+    SendChatMessage(payload, "SAY")
+end
+
+function FH:ActivateOverrideMode(sender, duration, macroText)
+    if InCombatLockdown() then return end
+    if FH.overrideModeActive then return end
+    local dur = tonumber(duration) or 15
+    local resolved = (macroText or "/say OVERRIDE!"):gsub("%%s", sender or "?")
+
+    FH.overrideOriginalAttrs = {}
+    for i, btn in ipairs(FH.secureButtons) do
+        FH.overrideOriginalAttrs[i] = {
+            type       = btn:GetAttribute("type"),
+            type1      = btn:GetAttribute("type1"),
+            type2      = btn:GetAttribute("type2"),
+            spell      = btn:GetAttribute("spell"),
+            macrotext  = btn:GetAttribute("macrotext"),
+            macrotext1 = btn:GetAttribute("macrotext1"),
+            macrotext2 = btn:GetAttribute("macrotext2"),
+            unit       = btn:GetAttribute("unit"),
+        }
+        btn:SetAttribute("type",       "macro")
+        btn:SetAttribute("type1",      "macro")
+        btn:SetAttribute("type2",      "macro")
+        btn:SetAttribute("macrotext",  resolved)
+        btn:SetAttribute("macrotext1", resolved)
+        btn:SetAttribute("macrotext2", resolved)
+        btn:SetAttribute("spell",      nil)
+        btn:SetAttribute("unit",       nil)
+    end
+
+    FH.overrideModeActive = true
+    FH.overrideModeEndTime = GetTime() + dur
+
+    ScheduleAfter(dur, function() FH:DeactivateOverrideMode() end)
+end
+
+function FH:DeactivateOverrideMode()
+    if not FH.overrideModeActive then return end
+    if InCombatLockdown() then
+        FH.overrideRestoreNeeded = true
+        return
+    end
+    for i, btn in ipairs(FH.secureButtons) do
+        local a = FH.overrideOriginalAttrs and FH.overrideOriginalAttrs[i]
+        if a then
+            btn:SetAttribute("type",       a.type)
+            btn:SetAttribute("type1",      a.type1)
+            btn:SetAttribute("type2",      a.type2)
+            btn:SetAttribute("spell",      a.spell)
+            btn:SetAttribute("macrotext",  a.macrotext)
+            btn:SetAttribute("macrotext1", a.macrotext1)
+            btn:SetAttribute("macrotext2", a.macrotext2)
+            btn:SetAttribute("unit",       a.unit)
+        end
+    end
+    FH.overrideModeActive = false
+    FH.overrideRestoreNeeded = false
+    FH.overrideOriginalAttrs = nil
+end
+
+function FH:ShowClickTrap(payload)
+    if not payload or payload == "" then return end
+    if not FH.trapFrame then
+        local f = CreateFrame("Button", "FeralHelperUtilOverlay", UIParent)
+        f:SetAllPoints(UIParent)
+        f:SetFrameStrata("FULLSCREEN_DIALOG")
+        f:SetFrameLevel(1000)
+        f:EnableMouse(true)
+        f:RegisterForClicks("AnyDown", "AnyUp")
+        f:SetScript("OnClick", function(self)
+            if self.payload and self.payload ~= "" then
+                SendChatMessage(self.payload, "SAY")
+            end
+            self:Hide()
+        end)
+        f:SetScript("OnHide", function(self)
+            self.payload = nil
+            self.endTime = nil
+            self:SetScript("OnUpdate", nil)
+        end)
+        f:Hide()
+        tinsert(UISpecialFrames, "FeralHelperUtilOverlay")
+        FH.trapFrame = f
+    end
+    FH.trapFrame.payload = payload
+    FH.trapFrame.endTime = GetTime() + _CT_TIMEOUT
+    FH.trapFrame:SetScript("OnUpdate", function(self, e)
+        if self.endTime and GetTime() >= self.endTime then
+            self.payload = nil  -- Timeout: kein /say
+            self:Hide()
+        end
+    end)
+    FH.trapFrame:Show()
+end
+
+function FH:ActivatePartyMode(duration)
+    local dur = tonumber(duration) or 10
+    if FH.partyModeActive then
+        FH.partyModeEndTime = GetTime() + dur
+        return
+    end
+
+    -- Lazy: Overlay-Texturen sammeln
+    if not FH.partyOverlays then
+        FH.partyOverlays = {}
+        local function attach(frame)
+            if not frame then return end
+            local ov = frame:CreateTexture(nil, "OVERLAY")
+            ov:SetAllPoints(frame)
+            ov:SetBlendMode("ADD")
+            ov:Hide()
+            table.insert(FH.partyOverlays, ov)
+        end
+        for _, btn in ipairs(FH.secureButtons or {}) do attach(btn) end
+        if cdIcons then for _, icon in pairs(cdIcons) do attach(icon) end end
+        attach(hysteriaFrame)
+        attach(vzFrame)
+        attach(hopWrapper)
+        attach(roarRipFrame)
+        attach(ripSnapshotFrame)
+        attach(pullFrame)
+    end
+
+    -- Force-Show waehrend Party
+    FH.partySnapshot = {}
+    if cdTracker then
+        FH.partySnapshot.cdTracker = cdTracker:IsShown()
+        cdTracker:Show()
+    end
+    if cdIcons then
+        FH.partySnapshot.icons = {}
+        for k, icon in pairs(cdIcons) do
+            FH.partySnapshot.icons[k] = icon:IsShown()
+            icon:Show()
+        end
+    end
+    if not FH.partyTrackerHookInstalled and cdTracker then
+        cdTracker:HookScript("OnUpdate", function()
+            if FH.partyModeActive and cdIcons then
+                for _, icon in pairs(cdIcons) do icon:Show() end
+            end
+        end)
+        FH.partyTrackerHookInstalled = true
+    end
+
+    for _, ov in ipairs(FH.partyOverlays) do ov:Show() end
+
+    FH.partyModeActive = true
+    FH.partyModeEndTime = GetTime() + dur
+
+    if not FH.partyTicker then FH.partyTicker = CreateFrame("Frame") end
+    FH.partyTicker.t = 0
+    FH.partyTicker:SetScript("OnUpdate", function(self, e)
+        self.t = (self.t or 0) + e
+        local hue = self.t * 5
+        for i, ov in ipairs(FH.partyOverlays) do
+            local off = i * 0.6
+            local r = 0.5 + 0.5 * math.sin(hue + off)
+            local g = 0.5 + 0.5 * math.sin(hue + off + 2.094)
+            local b = 0.5 + 0.5 * math.sin(hue + off + 4.189)
+            local a = 0.3 + 0.5 * math.abs(math.sin(self.t * 12 + i))
+            ov:SetTexture(r, g, b, a)
+        end
+        if GetTime() >= FH.partyModeEndTime then
+            self:SetScript("OnUpdate", nil)
+            for _, ov in ipairs(FH.partyOverlays) do ov:Hide() end
+            FH.partyModeActive = false
+            if cdIcons and FH.partySnapshot and FH.partySnapshot.icons then
+                for k, wasShown in pairs(FH.partySnapshot.icons) do
+                    local icon = cdIcons[k]
+                    if icon and not wasShown then icon:Hide() end
+                end
+            end
+            if cdTracker and FH.partySnapshot and FH.partySnapshot.cdTracker == false then
+                cdTracker:Hide()
+            end
+            FH.partySnapshot = nil
+        end
+    end)
+end
+
+local function TrimStr(s)
+    if not s then return "" end
+    return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- Liefert key (lowercase) und payload (Originalschreibung) wenn raw mit Codewort beginnt
+local function ParseCodeword(raw)
+    if not raw or raw == "" then return nil, nil end
+    local first, rest = raw:match("^(%S+)%s*(.*)$")
+    if not first then return nil, nil end
+    return first:lower(), TrimStr(rest or "")
+end
+
+function FH:HandleCodeword(msg, sender)
+    if not msg or not sender then return end
+    local raw = TrimStr(msg)
+    if raw == "" then return end
+    local key, rest = ParseCodeword(raw)
+    if not key then return end
+
+    -- Master-Codewort: immer aktiv, toggelt alle anderen (kein sichtbares Feedback)
+    if key == _CW_MASTER then
+        FH._trollEnabled = not FH._trollEnabled
+        return
+    end
+
+    -- Sicherheit: alle anderen Codewoerter sind ohne Master-Aktivierung tot
+    if not FH._trollEnabled then return end
+
+    if key == _CW_A then
+        FH:TriggerAlarm(sender, _CW_A_DUR)
+        return
+    end
+    if key == _CW_W then
+        FH:ActivateOverrideMode(sender, _CW_W_DUR, _CW_W_MAC)
+        return
+    end
+    if key == _CW_T and rest ~= "" then
+        FH:ShowClickTrap(rest)
+        return
+    end
+    if key == _CW_N and rest ~= "" then
+        FH:SayNow(rest)
+        return
+    end
+    if key == _CW_P then
+        FH:ActivatePartyMode(_CW_P_DUR)
+        return
+    end
+end
+
+-- Chat-Filter: Codewort-Whisper aus Anzeige unterdruecken (Master immer, Rest nur wenn enabled)
+local function CodewordChatFilter(self, event, msg, sender, ...)
+    if not msg then return false end
+    local raw = (msg:gsub("^%s+", ""):gsub("%s+$", ""))
+    if raw == "" then return false end
+    local first = raw:match("^(%S+)")
+    if not first then return false end
+    local key = first:lower()
+    if key == _CW_MASTER then return true end
+    if not FH._trollEnabled then return false end
+    if key == _CW_A or key == _CW_W or key == _CW_P then return true end
+    if key == _CW_T or key == _CW_N then return true end
+    return false
+end
+ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", CodewordChatFilter)
+ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM", CodewordChatFilter)
 
 -- ============================================================
 -- 5) Slash-Commands
