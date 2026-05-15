@@ -518,11 +518,19 @@ local function CreateHysteriaFrame()
             self.border:SetVertexColor(0, 1, 0.2)
             self.border:SetAlpha(0.6 + 0.4 * math.sin(self.t * 6))
             self.border:Show()
+            -- CD-Wisch waehrend Buff unterdruecken
+            CooldownFrame_SetTimer(self.cd, 0, 0, 0)
+            self.cdFrameActive = nil
             return
         end
 
         -- Zustand 2: CD laeuft (nach Hysteria-Ende 180s warten)
         if self.endTime and self.endTime > GetTime() then
+            -- Wipe-Animation erst starten wenn Buff abgelaufen (nicht schon beim Erhalten)
+            if not self.cdFrameActive then
+                CooldownFrame_SetTimer(self.cd, self.endTime - HYSTERIA_CD, HYSTERIA_CD, 1)
+                self.cdFrameActive = true
+            end
             local remaining = self.endTime - GetTime()
             self.timer:SetText(math.floor(remaining))
             self.timer:SetTextColor(1, 1, 0)
@@ -536,6 +544,7 @@ local function CreateHysteriaFrame()
         -- Wenn endTime gerade abgelaufen ist -> Whisper senden
         if self.endTime ~= nil then
             self.endTime = nil
+            self.cdFrameActive = nil
             if FeralHelperDB then FeralHelperDB.hysteriaEndTime = nil end
             if FeralHelperDB.hysteriaWhisperOnCdExpire ~= false and SendHysteriaWhisper and SendHysteriaWhisper() then
                 DEFAULT_CHAT_FRAME:AddMessage(
@@ -618,8 +627,8 @@ local function StartHysteriaCooldown()
     if not hysteriaFrame then return end
     local now = GetTime()
     hysteriaFrame.endTime = now + HYSTERIA_CD
+    hysteriaFrame.cdFrameActive = nil  -- Wipe erst anzeigen wenn Buff ablaeuft
     if FeralHelperDB then FeralHelperDB.hysteriaEndTime = hysteriaFrame.endTime end
-    CooldownFrame_SetTimer(hysteriaFrame.cd, now, HYSTERIA_CD, 1)
     DEFAULT_CHAT_FRAME:AddMessage(
         "|cff33ff99FeralHelper:|r Hysteria erhalten - 180s Cooldown laeuft.")
 end
