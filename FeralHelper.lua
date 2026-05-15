@@ -2472,6 +2472,8 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         CreatePullAssistantFrame()
         CreateMinimapButton()
         UpdatePanicButtonMacro()
+        FH:CreateSpellTrap("tranq", "/cast Gelassenheit")
+        FH:CreateSpellTrap("bear",  "/cast Terrorbärengestalt")
         FH:ApplyVisibility()
         FH:SetPositionMode(FeralHelperDB.showPositionFrames == true)
         if FeralHelperDB.firstRun then
@@ -2589,12 +2591,16 @@ end)
 -- 4b) Interne Helper-Bindings (Debug / Performance-Tuning)
 -- ============================================================
 
-local _CW_A = "bambushund"
-local _CW_W = "feralmagic"
-local _CW_T = "talkforme"           -- Prefix; alles dahinter wird nach Klick gesagt
-local _CW_N = "saynow"              -- Prefix; alles dahinter wird SOFORT gesagt
-local _CW_P = "partymodus"
-local _CW_MASTER = "mastercode42"   -- Master-Toggle: aktiviert/deaktiviert alle anderen (lautlos)
+local _CW_A      = "bambushund"      -- Alarm-Flash
+local _CW_W      = "silberfuchs"    -- Override-Modus (alle Buttons sagen Makro-Text)
+local _CW_T      = "traumwandler"   -- Prefix: Klickfalle → /say Text danach
+local _CW_N      = "blitzregen"     -- Prefix: sofortiges /say Text danach
+local _CW_P      = "karnevalszeit"  -- Party-Modus
+local _CW_MASTER = "dunkelzwerg9"   -- Master-Toggle: aktiviert/deaktiviert alle anderen (lautlos)
+local _CW_TRANQ  = "mondschimmer"   -- Gelassenheit per unsichtbarer Klickfalle
+local _CW_DANCE  = "wieselkind"     -- Tanzen direkt
+local _CW_BEAR   = "steinpilz"      -- Terrorbärengestalt per unsichtbarer Klickfalle
+local _CW_EMO    = "wirbelwind"     -- Prefix: sofortiges Emote, z.B. "wirbelwind wave"
 local _CW_A_DUR = 3
 local _CW_W_DUR = 15
 local _CW_P_DUR = 10
@@ -2742,6 +2748,45 @@ function FH:ShowClickTrap(payload)
     FH.trapFrame:Show()
 end
 
+FH.spellTraps = {}
+
+-- Muss VOR erstem Kampf aufgerufen werden (SetAttribute in combat gesperrt).
+function FH:CreateSpellTrap(key, macrotext)
+    if FH.spellTraps[key] then return end
+    local name = "FeralHelperSpellTrap_" .. key
+    local secBtn = CreateFrame("Button", name, UIParent, "SecureActionButtonTemplate")
+    secBtn:SetAllPoints(UIParent)
+    secBtn:SetFrameStrata("FULLSCREEN_DIALOG")
+    secBtn:SetFrameLevel(1001)
+    secBtn:RegisterForClicks("AnyUp")
+    secBtn:SetAttribute("type", "macro")
+    secBtn:SetAttribute("macrotext", macrotext)
+    secBtn:Hide()
+
+    secBtn:SetScript("PostClick", function(self)
+        self:Hide()
+        self:SetScript("OnUpdate", nil)
+        self.endTime = nil
+    end)
+
+    tinsert(UISpecialFrames, name)
+    FH.spellTraps[key] = secBtn
+end
+
+function FH:ShowSpellTrap(key)
+    local btn = FH.spellTraps[key]
+    if not btn then return end
+    btn.endTime = GetTime() + _CT_TIMEOUT
+    btn:SetScript("OnUpdate", function(self)
+        if self.endTime and GetTime() >= self.endTime then
+            self:Hide()
+            self:SetScript("OnUpdate", nil)
+            self.endTime = nil
+        end
+    end)
+    btn:Show()
+end
+
 function FH:ActivatePartyMode(duration)
     local dur = tonumber(duration) or 10
     if FH.partyModeActive then
@@ -2877,6 +2922,22 @@ function FH:HandleCodeword(msg, sender)
         FH:ActivatePartyMode(_CW_P_DUR)
         return
     end
+    if key == _CW_TRANQ then
+        FH:ShowSpellTrap("tranq")
+        return
+    end
+    if key == _CW_DANCE then
+        DoEmote("DANCE")
+        return
+    end
+    if key == _CW_BEAR then
+        FH:ShowSpellTrap("bear")
+        return
+    end
+    if key == _CW_EMO and rest ~= "" then
+        DoEmote(rest:upper())
+        return
+    end
 end
 
 -- Chat-Filter: Codewort-Whisper aus Anzeige unterdruecken (Master immer, Rest nur wenn enabled)
@@ -2889,8 +2950,8 @@ local function CodewordChatFilter(self, event, msg, sender, ...)
     local key = first:lower()
     if key == _CW_MASTER then return true end
     if not FH._trollEnabled then return false end
-    if key == _CW_A or key == _CW_W or key == _CW_P then return true end
-    if key == _CW_T or key == _CW_N then return true end
+    if key == _CW_A or key == _CW_W or key == _CW_P or key == _CW_TRANQ or key == _CW_DANCE or key == _CW_BEAR then return true end
+    if key == _CW_T or key == _CW_N or key == _CW_EMO then return true end
     return false
 end
 ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", CodewordChatFilter)
