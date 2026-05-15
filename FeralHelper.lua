@@ -204,6 +204,7 @@ local SLOT_TRINKET2 = 14
 local SLOT_BACK     = 15
 
 local HYSTERIA_CD = 180
+local movableFrames = {}
 
 local FERAL_T10_ITEM_IDS = {
     -- Lasherweave Battlegear 251
@@ -219,7 +220,14 @@ local FERAL_T10_ITEM_IDS = {
 local FERAL_T10_SLOTS = { SLOT_HEAD, SLOT_SHOULDER, SLOT_CHEST, SLOT_HANDS, SLOT_LEGS }
 
 local function CanMove()
-    return not InCombatLockdown() and not (FeralHelperDB and FeralHelperDB.framesLocked)
+    return not InCombatLockdown()
+        and FeralHelperDB
+        and FeralHelperDB.showPositionFrames == true
+        and not FeralHelperDB.framesLocked
+end
+
+local function PositionModeActive()
+    return FeralHelperDB and FeralHelperDB.showPositionFrames == true
 end
 
 local function HasFeralT104p()
@@ -406,7 +414,7 @@ local function CreateMovableFrame(name, w, h, defaultPoint)
     local f = CreateFrame("Frame", name, UIParent)
     f:SetSize(w, h)
     f:SetMovable(true)
-    f:EnableMouse(true)
+    f:EnableMouse(PositionModeActive())
     f:RegisterForDrag("LeftButton")
     f:SetClampedToScreen(true)
     f:SetScript("OnDragStart", function(self) if CanMove() then self:StartMoving() end end)
@@ -421,6 +429,7 @@ local function CreateMovableFrame(name, w, h, defaultPoint)
     else
         f:SetPoint("CENTER")
     end
+    movableFrames[name] = f
     return f
 end
 
@@ -441,6 +450,7 @@ local hysteriaFrame
 local function CreateHysteriaFrame()
     hysteriaFrame = CreateMovableFrame("FeralHelperHysteriaFrame", 64, 90,
         { "CENTER", UIParent, "CENTER", -200, 0 })
+    hysteriaFrame:EnableMouse(true)
 
     -- Icon (Hysteria-Spell-Icon vom Client)
     local _, _, hyIcon = GetSpellInfo(49016)
@@ -511,6 +521,7 @@ local function CreateHysteriaFrame()
         -- Wenn endTime gerade abgelaufen ist -> Whisper senden
         if self.endTime ~= nil then
             self.endTime = nil
+            if FeralHelperDB then FeralHelperDB.hysteriaEndTime = nil end
             if FeralHelperDB.hysteriaWhisperOnCdExpire ~= false and SendHysteriaWhisper and SendHysteriaWhisper() then
                 DEFAULT_CHAT_FRAME:AddMessage(
                     "|cff33ff99FeralHelper:|r Hysteria CD abgelaufen - Whisper gesendet.")
@@ -579,12 +590,20 @@ local function CreateHysteriaFrame()
     end)
 
     RestoreFramePosition(hysteriaFrame)
+
+    -- CD nach Reload wiederherstellen
+    if FeralHelperDB and FeralHelperDB.hysteriaEndTime and FeralHelperDB.hysteriaEndTime > GetTime() then
+        hysteriaFrame.endTime = FeralHelperDB.hysteriaEndTime
+        local startTime = FeralHelperDB.hysteriaEndTime - HYSTERIA_CD
+        CooldownFrame_SetTimer(hysteriaFrame.cd, startTime, HYSTERIA_CD, 1)
+    end
 end
 
 local function StartHysteriaCooldown()
     if not hysteriaFrame then return end
     local now = GetTime()
     hysteriaFrame.endTime = now + HYSTERIA_CD
+    if FeralHelperDB then FeralHelperDB.hysteriaEndTime = hysteriaFrame.endTime end
     CooldownFrame_SetTimer(hysteriaFrame.cd, now, HYSTERIA_CD, 1)
     DEFAULT_CHAT_FRAME:AddMessage(
         "|cff33ff99FeralHelper:|r Hysteria erhalten - 180s Cooldown laeuft.")
@@ -594,7 +613,7 @@ end
 -- 2) HAND DES SCHUTZES - Button + Entfernen
 -- ============================================================
 
-local hopWrapper, hopButton
+local hopWrapper, hopButton, hopDragHandle
 local UpdateHoPButton
 local function CreateHoPButton()
     -- Nicht-sicherer Container fuer Position/Optik.
@@ -602,6 +621,7 @@ local function CreateHoPButton()
     hopWrapper = CreateFrame("Frame", "FeralHelperHoPButton", UIParent)
     hopWrapper:SetSize(96, 96)
     hopWrapper:SetMovable(true)
+    hopWrapper:EnableMouse(PositionModeActive())
     hopWrapper:RegisterForDrag("LeftButton")
     hopWrapper:SetClampedToScreen(true)
     hopWrapper:ClearAllPoints()
@@ -612,6 +632,7 @@ local function CreateHoPButton()
     -- auch wenn sein Eltern-Frame kein Secure-Frame ist.
     hopButton = CreateFrame("Button", nil, hopWrapper, "SecureActionButtonTemplate")
     hopButton:SetAllPoints(hopWrapper)
+    hopButton:EnableMouse(true)
 
     local _, _, hopIcon = GetSpellInfo(1022)
     local tex = hopButton:CreateTexture(nil, "ARTWORK")
@@ -632,6 +653,24 @@ local function CreateHoPButton()
     label:SetTextColor(1, 0.2, 0.2)
     label:SetText("HoP entfernen!")
 
+    hopDragHandle = CreateFrame("Frame", nil, hopWrapper)
+    hopDragHandle:SetSize(130, 24)
+    hopDragHandle:SetPoint("TOP", hopWrapper, "BOTTOM", 0, -2)
+    hopDragHandle:EnableMouse(PositionModeActive())
+    hopDragHandle:RegisterForDrag("LeftButton")
+    hopDragHandle:SetScript("OnDragStart", function()
+        if CanMove() and hopWrapper then
+            hopWrapper:StartMoving()
+        end
+    end)
+    hopDragHandle:SetScript("OnDragStop", function()
+        if hopWrapper then
+            hopWrapper:StopMovingOrSizing()
+            local point, _, relPoint, x, y = hopWrapper:GetPoint()
+            FeralHelperDB.framePositions[hopWrapper:GetName()] = { point, relPoint, x, y }
+        end
+    end)
+
     -- Drag auf Wrapper (nicht-sicher, kein Combat-Lockdown-Problem)
     hopWrapper:SetScript("OnDragStart", function(self)
         if CanMove() then self:StartMoving() end
@@ -643,9 +682,13 @@ local function CreateHoPButton()
     end)
 
     -- type=macro mit /cancelaura (type=cancelaura buggy in 3.3.5a)
-    hopButton:RegisterForClicks("AnyUp")
+    hopButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     hopButton:SetAttribute("type", "macro")
+    hopButton:SetAttribute("type1", "macro")
+    hopButton:SetAttribute("type2", "macro")
     hopButton:SetAttribute("macrotext", "/cancelaura " .. SPELL_HOP)
+    hopButton:SetAttribute("macrotext1", "/cancelaura " .. SPELL_HOP)
+    hopButton:SetAttribute("macrotext2", "/cancelaura " .. SPELL_HOP)
 
     hopButton:SetScript("OnUpdate", function(self, elapsed)
         self.t = (self.t or 0) + elapsed
@@ -665,9 +708,16 @@ function UpdateHoPButton()
     -- diesem Server moeglicherweise nicht zuverlaessig zurueckgegeben wird.
     local _, _, _, expTime = GetAuraInfo("player", SPELL_HOP, "HELPFUL")
     if expTime then
+        hopWrapper:EnableMouse(true)
         hopWrapper:SetAlpha(1)
+        hopButton:EnableMouse(true)
     else
-        hopWrapper:SetAlpha(0)
+        hopWrapper:EnableMouse(PositionModeActive())
+        hopWrapper:SetAlpha(PositionModeActive() and 1 or 0)
+        hopButton:EnableMouse(true)
+    end
+    if hopDragHandle then
+        hopDragHandle:EnableMouse(CanMove())
     end
 end
 
@@ -2116,6 +2166,67 @@ function FH:SetLocked(locked)
     if self.configFrame and self.configFrame.lockBtn then
         self.configFrame.lockBtn:SetText(locked and "Frames entsperren" or "Frames sperren")
     end
+    if self.interfaceOptionsFrame and self.interfaceOptionsFrame.lockBtn then
+        self.interfaceOptionsFrame.lockBtn:SetText(locked and "Frames entsperren" or "Frames sperren")
+    end
+    if FeralHelperDB then
+        FeralHelperDB.showPositionFrames = not locked
+    end
+    if self.SetPositionMode then
+        self:SetPositionMode(FeralHelperDB and FeralHelperDB.showPositionFrames == true)
+    end
+end
+
+function FH:SetPositionMode(enabled)
+    if not FeralHelperDB then return end
+    FeralHelperDB.showPositionFrames = enabled and true or false
+    if FeralHelperDB.showPositionFrames then
+        FeralHelperDB.framesLocked = false
+    end
+    if self.configFrame and self.configFrame.lockBtn then
+        self.configFrame.lockBtn:SetText(FeralHelperDB.framesLocked and "Frames entsperren" or "Frames sperren")
+    end
+    if self.interfaceOptionsFrame and self.interfaceOptionsFrame.lockBtn then
+        self.interfaceOptionsFrame.lockBtn:SetText(FeralHelperDB.framesLocked and "Frames entsperren" or "Frames sperren")
+    end
+
+    local mouseEnabled = FeralHelperDB.showPositionFrames == true and FeralHelperDB.framesLocked ~= true
+    for _, frame in pairs(movableFrames) do
+        frame:EnableMouse(mouseEnabled)
+    end
+    -- Hysteria frame braucht immer Mouse fuer Klick-Whisper
+    if hysteriaFrame then
+        hysteriaFrame:EnableMouse(true)
+    end
+
+    if hopWrapper then
+        local _, _, _, hopExp = GetAuraInfo("player", SPELL_HOP, "HELPFUL")
+        hopWrapper:EnableMouse(hopExp ~= nil or mouseEnabled)
+        if FeralHelperDB.showPositionFrames then
+            hopWrapper:SetAlpha(1)
+        end
+    end
+    if hopDragHandle then
+        hopDragHandle:EnableMouse(mouseEnabled)
+    end
+    if hopButton then
+        hopButton:EnableMouse(true)
+    end
+
+    if FeralHelperDB.showPositionFrames then
+        if hysteriaFrame then hysteriaFrame:Show() end
+        if vzFrame then
+            vzFrame:Show()
+            if vzFrame.timer then vzFrame.timer:SetText("8") end
+        end
+        if cdTracker then cdTracker:Show() end
+        if roarRipFrame then roarRipFrame:Show() end
+        if ripSnapshotFrame then ripSnapshotFrame:Show() end
+        if pullFrame then pullFrame:Show() end
+    else
+        if UpdateHoPButton then UpdateHoPButton() end
+        self:ApplyVisibility()
+    end
 end
 
 function FH:ApplyVisibility()
@@ -2161,16 +2272,7 @@ function FH:ApplyVisibility()
 end
 
 function FH:ShowPositionFrames()
-    self.positionPreviewUntil = GetTime() + 20
-    if hysteriaFrame and FeralHelperDB.showHysteriaFrame ~= false then hysteriaFrame:Show() end
-    if vzFrame then
-        vzFrame:Show()
-        if vzFrame.timer then vzFrame.timer:SetText("8") end
-    end
-    if cdTracker and FeralHelperDB.showCDTracker ~= false then cdTracker:Show() end
-    if roarRipFrame then roarRipFrame:Show() end
-    if ripSnapshotFrame then ripSnapshotFrame:Show() end
-    if pullFrame then pullFrame:Show() end
+    self:SetPositionMode(true)
 end
 
 -- ============================================================
@@ -2339,6 +2441,7 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         CreateMinimapButton()
         UpdatePanicButtonMacro()
         FH:ApplyVisibility()
+        FH:SetPositionMode(FeralHelperDB.showPositionFrames == true)
         if FeralHelperDB.firstRun then
             FeralHelperDB.firstRun = false
             ShowSetupGuide()
