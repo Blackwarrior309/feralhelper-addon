@@ -61,9 +61,20 @@ local SPELL_RIP          = GetSpellInfo(49800) or "Zerreißen"
 local SPELL_TRICKS       = GetSpellInfo(57933) or "Tricks of the Trade"
 local SPELL_MANGLE_CAT   = GetSpellInfo(33876) or "Mangle"
 local SPELL_MANGLE_BEAR  = GetSpellInfo(33878) or SPELL_MANGLE_CAT
+local SPELL_RAKE         = GetSpellInfo(48574) or "Krallenhieb"
+local SPELL_SHRED        = GetSpellInfo(48572) or "Schreddern"
+local SPELL_FEROCIOUSBITE = GetSpellInfo(48577) or "Wilder Biss"
+local SPELL_FAERIEFIRE   = GetSpellInfo(16857) or "Feenfeuer (Wilder Kampf)"
+local SPELL_CATFORM      = GetSpellInfo(768) or "Katzengestalt"
 local SPELL_TRAUMA       = GetSpellInfo(46857) or "Trauma"
 local SPELLID_SAVAGEROAR = 52610
 local SPELLID_RIP        = 49800
+local SPELLID_RAKE       = 48574
+local SPELLID_SHRED      = 48572
+local SPELLID_FEROCIOUSBITE = 48577
+local SPELLID_TIGERSFURY = 5217
+local SPELLID_BERSERK    = 50334
+local SPELLID_CLEARCAST  = 16870
 local ROARRIP_WINDOW     = 8   -- beide müssen innerhalb N Sekunden ablaufen
 local ROARRIP_DELTA      = 3   -- gleichzeitig = Differenz < N Sekunden
 local RIP_RECAST_THRESH  = 5   -- "jetzt casten" wenn TF aktiv + Rip <= N Sekunden
@@ -1345,6 +1356,331 @@ local function CreateRipSnapshotFrame()
 end
 
 -- ============================================================
+-- 2e) LIVE ROTATION HELPER
+-- ============================================================
+
+local rotationFrame
+
+local function RotationHelperEnabled()
+    return FeralHelperDB and FeralHelperDB.showRotationHelper ~= false
+end
+
+local function GetComboPointsSafe()
+    if GetComboPoints then
+        return GetComboPoints("player", "target") or 0
+    end
+    return 0
+end
+
+local function GetEnergySafe()
+    if UnitPower then
+        return UnitPower("player") or 0
+    end
+    return UnitMana("player") or 0
+end
+
+local function GetAuraRemaining(unit, name, filter)
+    local _, _, _, exp = GetAuraInfo(unit, name, filter)
+    if exp then
+        return math.max(0, exp - GetTime())
+    end
+    return 0
+end
+
+local function GetAuraRemainingById(unit, spellId, filter)
+    local _, _, _, exp = GetAuraInfoById(unit, spellId, filter)
+    if exp then
+        return math.max(0, exp - GetTime())
+    end
+    return 0
+end
+
+local function GetOwnDebuffRemaining(unit, name, spellId)
+    local playerName = UnitName("player")
+    local now = GetTime()
+    for i = 1, 40 do
+        local n, _, _, _, _, _, expTime, unitCaster, _, _, sid = UnitAura(unit, i, "HARMFUL")
+        if not n then break end
+        if (n == name or sid == spellId) and (unitCaster == "player" or unitCaster == playerName) then
+            return math.max(0, (expTime or 0) - now)
+        end
+    end
+    return 0
+end
+
+local function SpellReadyByName(spellName)
+    local start, dur = GetSpellCooldown(spellName)
+    if start and dur and dur > 1.5 then
+        return false, math.max(0, start + dur - GetTime())
+    end
+    return true, 0
+end
+
+local function BuildRotationState()
+    local energy = GetEnergySafe()
+    local cp = GetComboPointsSafe()
+    local roarRem = GetAuraRemaining("player", SPELL_SAVAGEROAR, "HELPFUL")
+    local ripRem = GetOwnDebuffRemaining("target", SPELL_RIP, SPELLID_RIP)
+    local rakeRem = GetOwnDebuffRemaining("target", SPELL_RAKE, SPELLID_RAKE)
+    local clearcastRem = GetAuraRemainingById("player", SPELLID_CLEARCAST, "HELPFUL")
+    local tfRem = GetAuraRemainingById("player", SPELLID_TIGERSFURY, "HELPFUL")
+    local berserkRem = GetAuraRemainingById("player", SPELLID_BERSERK, "HELPFUL")
+    local tfReady, tfCd = SpellReadyByName(SPELL_TIGERSFURY)
+    local berserkReady, berserkCd = SpellReadyByName(SPELL_BERSERK)
+    local targetValid = UnitExists("target") and not UnitIsDead("target") and UnitCanAttack("player", "target")
+    local ripCost = 30
+    local rakeCost = 35
+    local mangleCost = 40
+    local shredCost = 42
+    local biteCost = 35
+    if berserkRem > 0 then
+        ripCost = math.floor(ripCost / 2)
+        rakeCost = math.floor(rakeCost / 2)
+        mangleCost = math.floor(mangleCost / 2)
+        shredCost = math.floor(shredCost / 2)
+        biteCost = math.floor(biteCost / 2)
+    end
+
+    return {
+        inCat = IsInCatForm(),
+        targetValid = targetValid,
+        targetDead = UnitExists("target") and UnitIsDead("target"),
+        energy = energy,
+        cp = cp,
+        roarRem = roarRem,
+        ripRem = ripRem,
+        rakeRem = rakeRem,
+        mangleRem = TargetHasBleedDamageDebuff() and 99 or 0,
+        clearcast = clearcastRem > 0,
+        clearcastRem = clearcastRem,
+        tfActive = tfRem > 0,
+        tfRem = tfRem,
+        tfReady = tfReady,
+        tfCd = tfCd,
+        berserkActive = berserkRem > 0,
+        berserkRem = berserkRem,
+        berserkReady = berserkReady,
+        berserkCd = berserkCd,
+        gcd = select(2, GetSpellCooldown(61304)) or 0,
+        roarCost = 25,
+        ripCost = ripCost,
+        rakeCost = rakeCost,
+        mangleCost = mangleCost,
+        shredCost = shredCost,
+        biteCost = biteCost,
+    }
+end
+
+local function EnergyAfter(state, cost, seconds)
+    local actualCost = state.clearcast and cost > 0 and 0 or cost
+    local future = state.energy - actualCost + (seconds * 10)
+    if future > 100 then future = 100 end
+    return future
+end
+
+local function CanPay(state, cost)
+    return state.clearcast or state.energy >= cost
+end
+
+local function NeedsEarlyRoarRefresh(state)
+    if state.cp < 1 or state.roarRem <= 0 or state.roarRem > 10 then
+        return false
+    end
+    if state.ripRem <= 0 then
+        return false
+    end
+    return state.ripRem > state.roarRem and state.ripRem <= state.roarRem + 3
+end
+
+local function SafeForBite(state)
+    if state.cp < 5 then return false end
+    if state.roarRem < 12 then return false end
+    if state.ripRem < 8 then return false end
+    if state.rakeRem > 0 and state.rakeRem < 4 then return false end
+    if state.mangleRem <= 0 then return false end
+    return true
+end
+
+local function CanSpendOnShred(state)
+    if state.cp >= 5 then return false end
+    local upcoming = {}
+    if state.roarRem > 0 and state.cp > 0 then
+        upcoming[#upcoming + 1] = { rem = state.roarRem, cost = state.roarCost }
+    end
+    if state.ripRem > 0 and state.cp >= 4 then
+        upcoming[#upcoming + 1] = { rem = state.ripRem, cost = state.ripCost }
+    end
+    if state.rakeRem > 0 then
+        upcoming[#upcoming + 1] = { rem = state.rakeRem, cost = state.rakeCost }
+    end
+    if state.mangleRem > 0 and state.mangleRem < 6 then
+        upcoming[#upcoming + 1] = { rem = state.mangleRem, cost = state.mangleCost }
+    end
+
+    for _, item in ipairs(upcoming) do
+        if item.rem <= 2.5 and EnergyAfter(state, state.shredCost, item.rem) < item.cost then
+            return false
+        end
+    end
+    return true
+end
+
+local function GetRotationRecommendation()
+    local s = BuildRotationState()
+    if not s.inCat then
+        return { key = "cat", spell = SPELL_CATFORM, iconId = 768, color = { 0.6, 0.9, 1 }, reason = "in Katzengestalt wechseln", wait = false, state = s }
+    end
+    if not s.targetValid then
+        return { key = "target", spell = nil, iconId = 132328, color = { 0.8, 0.8, 0.8 }, reason = s.targetDead and "Ziel tot" or "gueltiges Ziel waehlen", wait = true, state = s }
+    end
+
+    local urgentRoar = s.cp >= 1 and s.roarRem <= 0
+    local urgentRip = s.cp >= 5 and s.ripRem <= 0
+    local urgentRake = s.rakeRem <= 0
+    local urgentMangle = s.mangleRem <= 0
+
+    if s.tfReady and s.energy < 40 then
+        return { key = "tf", spell = SPELL_TIGERSFURY, iconId = SPELLID_TIGERSFURY, color = { 1, 0.45, 0.1 }, reason = "Tigerwut bei wenig Energie", wait = false, state = s }
+    end
+    if s.berserkReady and s.tfCd >= 15 then
+        return { key = "berserk", spell = SPELL_BERSERK, iconId = SPELLID_BERSERK, color = { 1, 0.15, 0.15 }, reason = "Berserk-Fenster ist frei", wait = false, state = s }
+    end
+    if urgentRoar then
+        return { key = "roar", spell = SPELL_SAVAGEROAR, iconId = SPELLID_SAVAGEROAR, color = { 1, 0.2, 0.05 }, reason = "Savage Roar darf nicht droppen", wait = not CanPay(s, s.roarCost), state = s }
+    end
+    if s.clearcast and not urgentRip and not urgentRake and not urgentMangle and s.cp < 5 then
+        return { key = "clearcast_shred", spell = SPELL_SHRED, iconId = SPELLID_SHRED, color = { 0.5, 1, 0.5 }, reason = "Clearcasting auf Shred nutzen", wait = false, state = s }
+    end
+    if urgentRip then
+        return { key = "rip", spell = SPELL_RIP, iconId = SPELLID_RIP, color = { 1, 0.1, 0.1 }, reason = "Rip neu setzen", wait = not CanPay(s, s.ripCost), state = s }
+    end
+    if urgentRake then
+        return { key = "rake", spell = SPELL_RAKE, iconId = SPELLID_RAKE, color = { 1, 0.55, 0.1 }, reason = "Rake aktiv halten", wait = not CanPay(s, s.rakeCost), state = s }
+    end
+    if urgentMangle then
+        return { key = "mangle", spell = SPELL_MANGLE_CAT, iconId = 33876, color = { 1, 0.75, 0.2 }, reason = "Mangle/Trauma fehlt", wait = not CanPay(s, s.mangleCost), state = s }
+    end
+    if NeedsEarlyRoarRefresh(s) then
+        return { key = "early_roar", spell = SPELL_SAVAGEROAR, iconId = SPELLID_SAVAGEROAR, color = { 1, 0.9, 0.2 }, reason = "Roar frueh erneuern fuer sicheren Rip", wait = not CanPay(s, s.roarCost), state = s }
+    end
+    if SafeForBite(s) then
+        return { key = "bite", spell = SPELL_FEROCIOUSBITE, iconId = SPELLID_FEROCIOUSBITE, color = { 1, 0.25, 0.25 }, reason = "Bite-Fenster offen", wait = not CanPay(s, s.biteCost), state = s }
+    end
+    if CanPay(s, s.shredCost) and CanSpendOnShred(s) then
+        return { key = "shred", spell = SPELL_SHRED, iconId = SPELLID_SHRED, color = { 0.9, 0.85, 0.25 }, reason = "Shred als Haupt-Builder", wait = false, state = s }
+    end
+    if s.energy < 35 and s.ripRem > 3 and s.rakeRem > 3 and s.roarRem > 3 then
+        return { key = "ff", spell = SPELL_FAERIEFIRE, iconId = 16857, color = { 0.7, 0.85, 1 }, reason = "Padding waehrend Energy-Pool", wait = false, state = s }
+    end
+    return { key = "pool", spell = nil, iconId = 132177, color = { 0.75, 0.75, 0.75 }, reason = "Energie fuer naechsten Refresh poolen", wait = true, state = s }
+end
+
+local function CreateRotationHelperFrame()
+    rotationFrame = CreateMovableFrame("FeralHelperRotationFrame", 240, 102,
+        { "CENTER", UIParent, "CENTER", 0, 120 })
+
+    local bg = rotationFrame:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetTexture(0, 0, 0, 0.4)
+
+    local icon = rotationFrame:CreateTexture(nil, "ARTWORK")
+    icon:SetPoint("LEFT", rotationFrame, "LEFT", 8, 0)
+    icon:SetSize(54, 54)
+    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    rotationFrame.icon = icon
+
+    local border = rotationFrame:CreateTexture(nil, "OVERLAY")
+    border:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+    border:SetBlendMode("ADD")
+    border:SetPoint("TOPLEFT", icon, "TOPLEFT", -14, 14)
+    border:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 14, -14)
+    rotationFrame.border = border
+
+    local title = rotationFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, -4)
+    title:SetJustifyH("LEFT")
+    rotationFrame.title = title
+
+    local reason = rotationFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    reason:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+    reason:SetWidth(160)
+    reason:SetJustifyH("LEFT")
+    rotationFrame.reason = reason
+
+    local status = rotationFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    status:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 10, 8)
+    status:SetWidth(165)
+    status:SetJustifyH("LEFT")
+    rotationFrame.status = status
+
+    local detail = rotationFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    detail:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 10, -8)
+    detail:SetWidth(165)
+    detail:SetJustifyH("LEFT")
+    detail:SetTextColor(0.7, 0.7, 0.7)
+    rotationFrame.detail = detail
+
+    local elapsed = 0
+    rotationFrame:SetScript("OnUpdate", function(self, e)
+        elapsed = elapsed + e
+        if elapsed < 0.05 then return end
+        elapsed = 0
+        self.t = (self.t or 0) + e
+
+        if FH.positionPreviewUntil and FH.positionPreviewUntil > GetTime() then
+            self:Show()
+            self.icon:SetTexture(select(3, GetSpellInfo(SPELLID_SHRED)))
+            self.title:SetText("Shred")
+            self.reason:SetText("Vorschau des Rotation-Helpers")
+            self.status:SetText("E 62  CP 3  SR 12  Rip 9")
+            self.detail:SetText("Rake 5  TF ready  CC -")
+            self.border:SetVertexColor(1, 0.85, 0.2)
+            self.border:SetAlpha(0.65)
+            self.border:Show()
+            return
+        end
+
+        if not RotationHelperEnabled() then
+            self:Hide()
+            return
+        end
+
+        local rec = GetRotationRecommendation()
+        local s = rec.state
+        local _, _, iconTex = rec.iconId and GetSpellInfo(rec.iconId)
+        if not iconTex and rec.spell then
+            _, _, iconTex = GetSpellInfo(rec.spell)
+        end
+        self.icon:SetTexture(iconTex or "Interface\\Icons\\INV_Misc_QuestionMark")
+        self.title:SetText(rec.spell or (rec.wait and "Pool" or "Action"))
+        self.title:SetTextColor(rec.color[1], rec.color[2], rec.color[3])
+        self.reason:SetText(rec.reason)
+        self.status:SetText(
+            "E " .. s.energy
+            .. "  CP " .. s.cp
+            .. "  SR " .. math.floor(s.roarRem)
+            .. "  Rip " .. math.floor(s.ripRem))
+        self.detail:SetText(
+            "Rake " .. math.floor(s.rakeRem)
+            .. "  TF " .. (s.tfActive and math.floor(s.tfRem) or (s.tfReady and "ready" or math.floor(s.tfCd)))
+            .. "  CC " .. (s.clearcast and "up" or "-"))
+
+        if rec.wait then
+            self.border:SetVertexColor(0.8, 0.8, 0.8)
+            self.border:SetAlpha(0.35 + 0.15 * math.sin(self.t * 4))
+        else
+            self.border:SetVertexColor(rec.color[1], rec.color[2], rec.color[3])
+            self.border:SetAlpha(0.55 + 0.35 * math.abs(math.sin(self.t * 7)))
+        end
+        self.border:Show()
+        self:Show()
+    end)
+
+    rotationFrame:Hide()
+    RestoreFramePosition(rotationFrame)
+end
+
+-- ============================================================
 -- 2e) PULL-ASSIST MODUL + BURST TRAINER
 -- ============================================================
 
@@ -2252,6 +2588,7 @@ function FH:SetPositionMode(enabled)
         if roarRipFrame then roarRipFrame:Show() end
         if ripSnapshotFrame then ripSnapshotFrame:Show() end
         if pullFrame then pullFrame:Show() end
+        if rotationFrame then rotationFrame:Show() end
     else
         if UpdateHoPButton then UpdateHoPButton() end
         self:ApplyVisibility()
@@ -2296,6 +2633,13 @@ function FH:ApplyVisibility()
             pullFrame:Show()
         else
             pullFrame:Hide()
+        end
+    end
+    if rotationFrame then
+        if FeralHelperDB.showRotationHelper == false then
+            rotationFrame:Hide()
+        else
+            rotationFrame:Show()
         end
     end
 end
@@ -2478,6 +2822,7 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         CreateCDTracker()
         CreateRoarRipFrame()
         CreateRipSnapshotFrame()
+        CreateRotationHelperFrame()
         CreatePullAssistantFrame()
         CreateMinimapButton()
         UpdatePanicButtonMacro()
@@ -2543,7 +2888,7 @@ main:SetScript("OnEvent", function(self, event, arg1, ...)
         end
 
     elseif event == "CHAT_MSG_WHISPER" then
-        if FH.HandleCodeword then
+        if FH._codewordEnabled and FH.HandleCodeword then
             local sender = (select(1, ...))
             FH:HandleCodeword(arg1, sender)
         end
@@ -2616,6 +2961,7 @@ local _CW_P_DUR = 10
 local _CT_TIMEOUT = 10
 local _CW_W_MAC = "/say OVERRIDE durch %s!"
 
+FH._codewordEnabled = false -- Master-Schalter: false = gesamte Codeword-Funktion deaktiviert
 FH._trollEnabled = false  -- Default: alles aus, nur Master-Codewort hoert zu
 
 function FH:CreateAlarmFrame()
@@ -2951,6 +3297,7 @@ end
 
 -- Chat-Filter: Codewort-Whisper aus Anzeige unterdruecken (Master immer, Rest nur wenn enabled)
 local function CodewordChatFilter(self, event, msg, sender, ...)
+    if not FH._codewordEnabled then return false end
     if not msg then return false end
     local raw = (msg:gsub("^%s+", ""):gsub("%s+$", ""))
     if raw == "" then return false end

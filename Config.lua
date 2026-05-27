@@ -31,6 +31,7 @@ FeralHelper.defaults = {
     showRipSnapshot          = false,
     showPullAssistant        = false,
     pullTrainerEnabled       = false,
+    showRotationHelper       = true,
     pullMaxWait              = 8,
     minimapAngle             = 220,
 }
@@ -299,6 +300,7 @@ function FeralHelper:CreateConfigFrame(noShow)
         MakeCheckbox(f, "Rip-Snapshot/Pull-Modus", -492, "showRipSnapshot"),
         MakeCheckbox(f, "Pull-Assist Modul", -470, "showPullAssistant", 330),
         MakeCheckbox(f, "Pull-Rota Burst Trainer", -492, "pullTrainerEnabled", 330),
+        MakeCheckbox(f, "Live Rotation Helper", -514, "showRotationHelper"),
     }
     for _, cb in ipairs(catCbs) do
         cb:SetScript("OnClick", function(self)
@@ -335,6 +337,7 @@ function FeralHelper:CreateConfigFrame(noShow)
             FeralHelperDB.showRoarRipWarning = true
             FeralHelperDB.showRipSnapshot = true
             FeralHelperDB.showPullAssistant = true
+            FeralHelperDB.showRotationHelper = true
         end
         if FeralHelper.ShowPositionFrames then
             FeralHelper:ShowPositionFrames()
@@ -568,6 +571,7 @@ function FeralHelper:CreateInterfaceOptionsPanel()
         MakeCheckbox(content, "Rip-Snapshot/Pull-Modus", -636, "showRipSnapshot"),
         MakeCheckbox(content, "Pull-Assist Modul", -658, "showPullAssistant"),
         MakeCheckbox(content, "Pull-Rota Burst Trainer", -680, "pullTrainerEnabled"),
+        MakeCheckbox(content, "Live Rotation Helper", -702, "showRotationHelper"),
     }
     for _, cb in ipairs(catCbs) do
         cb:SetScript("OnClick", function(self)
@@ -615,6 +619,7 @@ function FeralHelper:CreateInterfaceOptionsPanel()
             FeralHelperDB.showRoarRipWarning = true
             FeralHelperDB.showRipSnapshot = true
             FeralHelperDB.showPullAssistant = true
+            FeralHelperDB.showRotationHelper = true
         end
         if FeralHelper.ShowPositionFrames then
             FeralHelper:ShowPositionFrames()
