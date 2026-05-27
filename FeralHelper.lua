@@ -1416,6 +1416,18 @@ local function SpellReadyByName(spellName)
     return true, 0
 end
 
+-- Spell-IDs der Waffen-/Mantel-Enchant-Proc-Buffs (Spieler-Aura)
+local ROT_ENCHANT_PROC_IDS = {
+    59626,  -- Black Magic
+    59620,  -- Berserker (Enchant)
+    28093,  -- Mongoose
+    64568,  -- Blutabzug (Blood Draining)
+    42976,  -- Vollstrecker (Executioner)
+    20007,  -- Kreuzritter (Crusader)
+    55637,  -- Lichtwelle (Lightweave)
+    55776,  -- Schwertwallgarn (Swordguard Embroidery)
+}
+
 local function BuildRotationState()
     local energy = GetEnergySafe()
     local cp = GetComboPointsSafe()
@@ -1440,6 +1452,32 @@ local function BuildRotationState()
         shredCost = math.floor(shredCost / 2)
         biteCost = math.floor(biteCost / 2)
     end
+
+    -- Trinket-Procs
+    local t1s = GetTrackedSlotProc(SLOT_TRINKET1)
+    local t2s = GetTrackedSlotProc(SLOT_TRINKET2)
+    local trinketProcActive = t1s.active or t2s.active
+    local trinketProcRem = 0
+    if t1s.active and t1s.rem and t1s.rem > 0 then trinketProcRem = t1s.rem end
+    if t2s.active and t2s.rem and t2s.rem > 0 then
+        trinketProcRem = math.max(trinketProcRem, t2s.rem)
+    end
+
+    -- Waffen-/Mantel-Enchant-Procs
+    local enchantProcActive = false
+    local enchantProcRem = 0
+    local rotNow = GetTime()
+    for _, sid in ipairs(ROT_ENCHANT_PROC_IDS) do
+        local _, _, _, exp0 = GetAuraInfoById("player", sid, "HELPFUL")
+        if exp0 then
+            enchantProcActive = true
+            local r0 = math.max(0, exp0 - rotNow)
+            if r0 > enchantProcRem then enchantProcRem = r0 end
+        end
+    end
+
+    local anyProcActive = trinketProcActive or enchantProcActive
+    local anyProcRem    = math.max(trinketProcRem, enchantProcRem)
 
     return {
         inCat = IsInCatForm(),
@@ -1468,6 +1506,12 @@ local function BuildRotationState()
         mangleCost = mangleCost,
         shredCost = shredCost,
         biteCost = biteCost,
+        trinketProcActive = trinketProcActive,
+        trinketProcRem    = trinketProcRem,
+        enchantProcActive = enchantProcActive,
+        enchantProcRem    = enchantProcRem,
+        anyProcActive     = anyProcActive,
+        anyProcRem        = anyProcRem,
     }
 end
 
@@ -1493,11 +1537,14 @@ local function NeedsEarlyRoarRefresh(state)
 end
 
 local function SafeForBite(state)
+    if state.berserkActive then return false end  -- Berserk = Burn-Phase, kein Bite
     if state.cp < 5 then return false end
     if state.roarRem < 12 then return false end
     if state.ripRem < 8 then return false end
-    if state.rakeRem > 0 and state.rakeRem < 4 then return false end
+    if state.rakeRem > 0 and state.rakeRem < 5 then return false end  -- <50% Rake-Restdauer
     if state.mangleRem <= 0 then return false end
+    -- Proc aktiv: kein Bite wenn Rip vor Proc-Ende abläuft (CPs für Rip-Snapshot sparen)
+    if state.anyProcActive and state.ripRem < state.anyProcRem + 6 then return false end
     return true
 end
 
@@ -1539,11 +1586,23 @@ local function GetRotationRecommendation()
     local urgentRake = s.rakeRem <= 0
     local urgentMangle = s.mangleRem <= 0
 
-    if s.tfReady and s.energy < 40 then
+    if s.tfReady and not s.berserkActive and s.energy < 40 then
         return { key = "tf", spell = SPELL_TIGERSFURY, iconId = SPELLID_TIGERSFURY, color = { 1, 0.45, 0.1 }, reason = "Tigerwut bei wenig Energie", wait = false, state = s }
     end
+    -- Berserk: erst ab >=80 Energie casten (maximale Nutzung der 15s)
     if s.berserkReady and s.tfCd >= 15 then
-        return { key = "berserk", spell = SPELL_BERSERK, iconId = SPELLID_BERSERK, color = { 1, 0.15, 0.15 }, reason = "Berserk-Fenster ist frei", wait = false, state = s }
+        if s.energy >= 80 then
+            return { key = "berserk", spell = SPELL_BERSERK, iconId = SPELLID_BERSERK, color = { 1, 0.15, 0.15 }, reason = "Berserk - voll aufgeladen!", wait = false, state = s }
+        else
+            return { key = "berserk_pool", spell = nil, iconId = SPELLID_BERSERK, color = { 1, 0.3, 0.3 }, reason = "Energie >80 sammeln, dann Berserk", wait = true, state = s }
+        end
+    end
+    -- Pre-Berserk: Berserk kommt bald -> jetzt Energie sammeln
+    if not s.berserkReady and s.berserkCd <= 15 and s.tfCd >= 15 and s.energy < 80
+       and s.ripRem > 3 and s.rakeRem > 3 and s.roarRem > 3 then
+        return { key = "preberserk_pool", spell = nil, iconId = SPELLID_BERSERK, color = { 0.9, 0.25, 0.25 },
+                 reason = "Berserk in " .. math.floor(s.berserkCd) .. "s - Energie auf 80+ poolen",
+                 wait = true, state = s }
     end
     if urgentRoar then
         return { key = "roar", spell = SPELL_SAVAGEROAR, iconId = SPELLID_SAVAGEROAR, color = { 1, 0.2, 0.05 }, reason = "Savage Roar darf nicht droppen", wait = not CanPay(s, s.roarCost), state = s }
@@ -1563,20 +1622,37 @@ local function GetRotationRecommendation()
     if NeedsEarlyRoarRefresh(s) then
         return { key = "early_roar", spell = SPELL_SAVAGEROAR, iconId = SPELLID_SAVAGEROAR, color = { 1, 0.9, 0.2 }, reason = "Roar frueh erneuern fuer sicheren Rip", wait = not CanPay(s, s.roarCost), state = s }
     end
+    -- Proc aktiv: Rip mit Proc-Snapshot neu setzen (5 CP, Rip läuft bald ab)
+    if s.anyProcActive and s.cp >= 5 and s.ripRem > 0 and s.ripRem <= s.anyProcRem + 4 then
+        local procLabel = s.trinketProcActive and "Trinket" or "Enchant"
+        return { key = "proc_rip", spell = SPELL_RIP, iconId = SPELLID_RIP,
+                 color = { 1, 0.4, 0.05 },
+                 reason = procLabel .. "-Proc: Rip-Snapshot erneuern",
+                 wait = not CanPay(s, s.ripCost), state = s }
+    end
     if SafeForBite(s) then
         return { key = "bite", spell = SPELL_FEROCIOUSBITE, iconId = SPELLID_FEROCIOUSBITE, color = { 1, 0.25, 0.25 }, reason = "Bite-Fenster offen", wait = not CanPay(s, s.biteCost), state = s }
     end
     if CanPay(s, s.shredCost) and CanSpendOnShred(s) then
-        return { key = "shred", spell = SPELL_SHRED, iconId = SPELLID_SHRED, color = { 0.9, 0.85, 0.25 }, reason = "Shred als Haupt-Builder", wait = false, state = s }
+        local reason = s.anyProcActive and "Shred - Proc-Fenster nutzen!" or "Shred als Haupt-Builder"
+        return { key = "shred", spell = SPELL_SHRED, iconId = SPELLID_SHRED,
+                 color = s.anyProcActive and { 1, 0.7, 0.1 } or { 0.9, 0.85, 0.25 },
+                 reason = reason, wait = false, state = s }
     end
     if s.energy < 35 and s.ripRem > 3 and s.rakeRem > 3 and s.roarRem > 3 then
         return { key = "ff", spell = SPELL_FAERIEFIRE, iconId = 16857, color = { 0.7, 0.85, 1 }, reason = "Padding waehrend Energy-Pool", wait = false, state = s }
+    end
+    -- Proc aktiv: kein reines Pool, lieber FaerieFire als Padding
+    if s.anyProcActive and s.ripRem > 2 and s.rakeRem > 2 and s.roarRem > 2 then
+        return { key = "proc_ff", spell = SPELL_FAERIEFIRE, iconId = 16857,
+                 color = { 1, 0.65, 0.15 },
+                 reason = "Proc aktiv - kein reines Pool", wait = false, state = s }
     end
     return { key = "pool", spell = nil, iconId = 132177, color = { 0.75, 0.75, 0.75 }, reason = "Energie fuer naechsten Refresh poolen", wait = true, state = s }
 end
 
 local function CreateRotationHelperFrame()
-    rotationFrame = CreateMovableFrame("FeralHelperRotationFrame", 240, 102,
+    rotationFrame = CreateMovableFrame("FeralHelperRotationFrame", 240, 175,
         { "CENTER", UIParent, "CENTER", 0, 120 })
 
     local bg = rotationFrame:CreateTexture(nil, "BACKGROUND")
@@ -1584,7 +1660,7 @@ local function CreateRotationHelperFrame()
     bg:SetTexture(0, 0, 0, 0.4)
 
     local icon = rotationFrame:CreateTexture(nil, "ARTWORK")
-    icon:SetPoint("LEFT", rotationFrame, "LEFT", 8, 0)
+    icon:SetPoint("LEFT", rotationFrame, "LEFT", 8, 16)
     icon:SetSize(54, 54)
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     rotationFrame.icon = icon
@@ -1620,6 +1696,53 @@ local function CreateRotationHelperFrame()
     detail:SetTextColor(0.7, 0.7, 0.7)
     rotationFrame.detail = detail
 
+    -- ── Rip-Snapshot-Sektion ─────────────────────────────────────
+    local divider = rotationFrame:CreateTexture(nil, "ARTWORK")
+    divider:SetPoint("TOPLEFT",  rotationFrame, "TOPLEFT",  4, -107)
+    divider:SetPoint("TOPRIGHT", rotationFrame, "TOPRIGHT", -4, -107)
+    divider:SetHeight(1)
+    divider:SetTexture(0.45, 0.45, 0.45, 0.9)
+    rotationFrame.divider = divider
+
+    local _, _, ripIconTex = GetSpellInfo(SPELLID_RIP)
+    local snapIcon = rotationFrame:CreateTexture(nil, "ARTWORK")
+    snapIcon:SetPoint("TOPLEFT", rotationFrame, "TOPLEFT", 8, -112)
+    snapIcon:SetSize(32, 32)
+    snapIcon:SetTexture(ripIconTex or "Interface\\Icons\\Ability_GhoulFrenzy")
+    snapIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    rotationFrame.snapIcon = snapIcon
+
+    local snapIconBorder = rotationFrame:CreateTexture(nil, "OVERLAY")
+    snapIconBorder:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+    snapIconBorder:SetBlendMode("ADD")
+    snapIconBorder:SetPoint("TOPLEFT",     snapIcon, "TOPLEFT",     -10, 10)
+    snapIconBorder:SetPoint("BOTTOMRIGHT", snapIcon, "BOTTOMRIGHT",  10, -10)
+    snapIconBorder:Hide()
+    rotationFrame.snapIconBorder = snapIconBorder
+
+    local snapTimer = rotationFrame:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    snapTimer:SetPoint("CENTER", snapIcon, "CENTER", 0, 0)
+    rotationFrame.snapTimer = snapTimer
+
+    local snapState = rotationFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    snapState:SetPoint("TOPLEFT", snapIcon, "TOPRIGHT", 6, 0)
+    snapState:SetJustifyH("LEFT")
+    rotationFrame.snapState = snapState
+
+    local snapBuffs = rotationFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    snapBuffs:SetPoint("TOPLEFT", snapIcon, "TOPRIGHT", 6, -12)
+    snapBuffs:SetWidth(190)
+    snapBuffs:SetJustifyH("LEFT")
+    snapBuffs:SetTextColor(0.65, 0.65, 0.65)
+    rotationFrame.snapBuffs = snapBuffs
+
+    local snapRec = rotationFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    snapRec:SetPoint("TOPLEFT", snapIcon, "BOTTOMLEFT", 0, -4)
+    snapRec:SetWidth(224)
+    snapRec:SetJustifyH("LEFT")
+    rotationFrame.snapRec = snapRec
+    -- ─────────────────────────────────────────────────────────────
+
     local elapsed = 0
     rotationFrame:SetScript("OnUpdate", function(self, e)
         elapsed = elapsed + e
@@ -1637,6 +1760,16 @@ local function CreateRotationHelperFrame()
             self.border:SetVertexColor(1, 0.85, 0.2)
             self.border:SetAlpha(0.65)
             self.border:Show()
+            -- Snapshot-Vorschau
+            self.snapTimer:SetText("12")
+            self.snapTimer:SetTextColor(0.2, 1, 0.2)
+            self.snapState:SetText("TF-aktiv")
+            self.snapState:SetTextColor(0.2, 1, 0.2)
+            self.snapBuffs:SetText("TF|cff00cc00+|r SR|cff00cc00+|r H|cffff4444-|r T|cffff4444-|r M|cff00cc00+|r 4500")
+            self.snapRec:SetText("|cffffff00\226\134\145 NEU RIP: 8s|r")
+            self.snapIconBorder:SetVertexColor(0, 1, 0.2)
+            self.snapIconBorder:SetAlpha(0.7)
+            self.snapIconBorder:Show()
             return
         end
 
@@ -1660,10 +1793,19 @@ local function CreateRotationHelperFrame()
             .. "  CP " .. s.cp
             .. "  SR " .. math.floor(s.roarRem)
             .. "  Rip " .. math.floor(s.ripRem))
+        local procStr = ""
+        if s.trinketProcActive and s.enchantProcActive then
+            procStr = "  |cffff9900PROC " .. math.floor(s.anyProcRem) .. "s|r"
+        elseif s.trinketProcActive then
+            procStr = "  |cffff9900T-PROC " .. math.floor(s.trinketProcRem) .. "s|r"
+        elseif s.enchantProcActive then
+            procStr = "  |cffff9900E-PROC " .. math.floor(s.enchantProcRem) .. "s|r"
+        end
         self.detail:SetText(
             "Rake " .. math.floor(s.rakeRem)
             .. "  TF " .. (s.tfActive and math.floor(s.tfRem) or (s.tfReady and "ready" or math.floor(s.tfCd)))
-            .. "  CC " .. (s.clearcast and "up" or "-"))
+            .. "  CC " .. (s.clearcast and "up" or "-")
+            .. procStr)
 
         if rec.wait then
             self.border:SetVertexColor(0.8, 0.8, 0.8)
@@ -1674,6 +1816,155 @@ local function CreateRotationHelperFrame()
         end
         self.border:Show()
         self:Show()
+
+        -- ── Rip-Snapshot-Update ──────────────────────────────────
+        local now = GetTime()
+        local ripExp = GetOwnRipOnTarget()
+
+        local function bs(b) return b and "|cff00cc00+|r" or "|cffff4444-|r" end
+
+        if not ripExp then
+            -- kein Rip auf Ziel
+            ripSnapshot = nil
+            self.prevSnapRipExp = nil
+            self.snapTimer:SetText("-")
+            self.snapTimer:SetTextColor(0.5, 0.5, 0.5)
+            self.snapState:SetText("kein Rip")
+            self.snapState:SetTextColor(0.5, 0.5, 0.5)
+            local _, _, _, tfExp2   = GetAuraInfoById("player", 5217, "HELPFUL")
+            local _, _, _, roarExp2 = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
+            local _, _, _, hystExp2 = GetAuraInfoById("player", 49016, "HELPFUL")
+            local _, _, _, totExp2  = GetAuraInfo("player", SPELL_TRICKS, "HELPFUL")
+            local curAP2 = GetPlayerAttackPowerTotal()
+            self.snapBuffs:SetText(
+                "TF" .. bs(tfExp2 ~= nil) ..
+                " SR" .. bs(roarExp2 ~= nil) ..
+                " H"  .. bs(hystExp2 ~= nil) ..
+                " T"  .. bs(totExp2  ~= nil) ..
+                " M"  .. bs(TargetHasBleedDamageDebuff()) ..
+                " " .. curAP2)
+            self.snapRec:SetText("")
+            self.snapIconBorder:Hide()
+        else
+            local ripRem = math.max(0, ripExp - now)
+
+            -- Neuen Rip-Cast erkennen
+            if not self.prevSnapRipExp or ripExp > self.prevSnapRipExp + 5 then
+                if not ripSnapshot or not ripSnapshot.capturedAt or now - ripSnapshot.capturedAt > 1 then
+                    ripSnapshot = CaptureRipSnapshot()
+                end
+            end
+            self.prevSnapRipExp = ripExp
+
+            -- Aktuelle Buffs
+            local _, _, _, tfExp   = GetAuraInfoById("player", 5217, "HELPFUL")
+            local _, _, _, roarExp = GetAuraInfo("player", SPELL_SAVAGEROAR, "HELPFUL")
+            local _, _, _, hystExp = GetAuraInfoById("player", 49016, "HELPFUL")
+            local _, _, _, totExp  = GetAuraInfo("player", SPELL_TRICKS, "HELPFUL")
+            local curAP = GetPlayerAttackPowerTotal()
+            local tfActive    = tfExp   ~= nil
+            local roarActive  = roarExp ~= nil
+            local hystActive  = hystExp ~= nil
+            local totActive   = totExp  ~= nil
+            local curMangle   = TargetHasBleedDamageDebuff()
+            local tfRem       = tfActive and math.max(0, tfExp - now) or 0
+
+            self.snapBuffs:SetText(
+                "TF" .. bs(tfActive) ..
+                " SR" .. bs(roarActive) ..
+                " H"  .. bs(hystActive) ..
+                " T"  .. bs(totActive) ..
+                " M"  .. bs(curMangle) ..
+                " " .. curAP)
+
+            -- Snapshot-Vergleich
+            local snapBetter = false
+            local advantageSec = nil
+            local recText = ""
+            if ripSnapshot then
+                local tfBetter     = tfActive    and not ripSnapshot.tfActive
+                local roarBetter   = roarActive  and not ripSnapshot.roarActive
+                local hystBetter   = hystActive  and not ripSnapshot.hysteriaActive
+                local totBetter    = totActive   and not ripSnapshot.totActive
+                local mangleBetter = curMangle   and not ripSnapshot.mangleActive
+                local apBetter     = curAP > ripSnapshot.ap + 300
+                local t1c = GetTrackedSlotProc(SLOT_TRINKET1)
+                local t2c = GetTrackedSlotProc(SLOT_TRINKET2)
+                local trinketBetter = (t1c.active and not ripSnapshot.trinket1Active)
+                                   or (t2c.active and not ripSnapshot.trinket2Active)
+                local reasons = {}
+                if tfBetter     then reasons[#reasons + 1] = "TF"     end
+                if roarBetter   then reasons[#reasons + 1] = "SR"     end
+                if hystBetter   then reasons[#reasons + 1] = "Hyst"   end
+                if totBetter    then reasons[#reasons + 1] = "Tricks" end
+                if mangleBetter then reasons[#reasons + 1] = "Mangle" end
+                if trinketBetter then reasons[#reasons + 1] = "Trinket" end
+                if apBetter     then reasons[#reasons + 1] = "AP+" .. (curAP - ripSnapshot.ap) end
+                if #reasons > 0 then
+                    snapBetter = true
+                    local advRem = math.huge
+                    if tfBetter   and tfExp   then advRem = math.min(advRem, tfExp - now)   end
+                    if roarBetter and roarExp then advRem = math.min(advRem, roarExp - now) end
+                    if hystBetter and hystExp then advRem = math.min(advRem, hystExp - now) end
+                    if totBetter  and totExp  then advRem = math.min(advRem, totExp - now)  end
+                    if (apBetter or trinketBetter) then
+                        if t1c.active and t1c.rem and t1c.rem > 0 then advRem = math.min(advRem, t1c.rem) end
+                        if t2c.active and t2c.rem and t2c.rem > 0 then advRem = math.min(advRem, t2c.rem) end
+                    end
+                    if advRem < math.huge then
+                        advantageSec = math.max(0, math.floor(advRem))
+                    end
+                    if ripRem <= RIP_RECAST_THRESH then
+                        recText = "|cffff4400\226\134\145 JETZT: " .. (advantageSec or "!") .. "s (" .. table.concat(reasons, " ") .. ")|r"
+                    else
+                        recText = "|cffffff00\226\134\145 NEU RIP: " .. (advantageSec or "bald") .. "s (" .. table.concat(reasons, " ") .. ")|r"
+                    end
+                end
+            end
+            self.snapRec:SetText(recText)
+
+            -- Timer-Farbe + State + Border
+            if snapBetter and ripRem <= RIP_RECAST_THRESH then
+                self.snapTimer:SetText(advantageSec or "!")
+                self.snapTimer:SetTextColor(1, 0.1, 0.1)
+                self.snapState:SetText("JETZT!")
+                self.snapState:SetTextColor(1, 0.1, 0.1)
+                self.snapIconBorder:SetVertexColor(1, 0.3, 0)
+                self.snapIconBorder:SetAlpha(0.6 + 0.4 * math.sin(self.t * 6))
+                self.snapIconBorder:Show()
+            elseif tfActive and ripRem <= RIP_RECAST_THRESH then
+                self.snapTimer:SetText(math.floor(ripRem))
+                self.snapTimer:SetTextColor(1, 0.1, 0.1)
+                self.snapState:SetText("JETZT!")
+                self.snapState:SetTextColor(1, 0.1, 0.1)
+                self.snapIconBorder:SetVertexColor(1, 0.3, 0)
+                self.snapIconBorder:SetAlpha(0.6 + 0.4 * math.sin(self.t * 6))
+                self.snapIconBorder:Show()
+            elseif tfActive then
+                self.snapTimer:SetText(math.floor(ripRem))
+                self.snapTimer:SetTextColor(0.2, 1, 0.2)
+                self.snapState:SetText("TF " .. math.floor(tfRem) .. "s")
+                self.snapState:SetTextColor(0.2, 1, 0.2)
+                self.snapIconBorder:SetVertexColor(0, 1, 0.2)
+                self.snapIconBorder:SetAlpha(0.4 + 0.4 * math.sin(self.t * 2.5))
+                self.snapIconBorder:Show()
+            elseif ripRem <= RIP_RECAST_THRESH then
+                self.snapTimer:SetText(math.floor(ripRem))
+                self.snapTimer:SetTextColor(1, 0.5, 0)
+                self.snapState:SetText("ABLAUF")
+                self.snapState:SetTextColor(1, 0.5, 0)
+                self.snapIconBorder:SetVertexColor(1, 0.5, 0)
+                self.snapIconBorder:SetAlpha(0.5 + 0.4 * math.sin(self.t * 4))
+                self.snapIconBorder:Show()
+            else
+                self.snapTimer:SetText(math.floor(ripRem))
+                self.snapTimer:SetTextColor(1, 0.7, 0.2)
+                self.snapState:SetText("Rip")
+                self.snapState:SetTextColor(1, 0.7, 0.2)
+                self.snapIconBorder:Hide()
+            end
+        end
+        -- ─────────────────────────────────────────────────────────
     end)
 
     rotationFrame:Hide()
